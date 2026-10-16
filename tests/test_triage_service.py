@@ -129,3 +129,62 @@ def test_get_groq_client_raises_when_api_key_set_but_model_missing():
     settings = Settings(_env_file=None, groq_api_key="test_key")
     with pytest.raises(ValueError, match="GROQ_MODEL must be set"):
         get_groq_client(settings)
+
+
+def test_get_system_prompt_defines_categories():
+    """The system prompt defines every supported category."""
+    prompt = get_system_prompt()
+    for category in (
+        "billing",
+        "technical",
+        "account_access",
+        "bug_report",
+        "feature_request",
+        "other",
+    ):
+        assert category in prompt
+    assert "payments" in prompt
+    assert "changing account email" in prompt
+
+
+def test_get_system_prompt_defines_sentiment():
+    """The system prompt defines every supported sentiment, including positive feedback."""
+    prompt = get_system_prompt()
+    for sentiment in ("positive", "neutral", "frustrated", "angry"):
+        assert sentiment in prompt
+    assert "appreciation" in prompt or "thanks" in prompt
+    assert "Do not infer frustration merely because a user mentions a problem" in prompt
+
+
+def test_get_system_prompt_defines_priority():
+    """The system prompt defines every supported priority level."""
+    prompt = get_system_prompt()
+    for priority in ("low", "medium", "high", "urgent"):
+        assert priority in prompt
+
+
+def test_get_system_prompt_defines_human_review_rules():
+    """The system prompt guides when human review is required."""
+    prompt = get_system_prompt()
+    assert "requires_human_review" in prompt
+    assert "positive feedback" in prompt
+    assert "urgent" in prompt
+
+
+def test_triage_passes_refined_prompt_as_instructions():
+    """The service passes get_system_prompt() as the Responses API instructions argument."""
+    with patch('app.services.triage.OpenAI') as MockOpenAI:
+        mock_client = Mock()
+        mock_response = Mock()
+        mock_response.output_text = '{"category": "other", "priority": "low", "sentiment": "positive", "summary": "Thanks for the help.", "requires_human_review": false, "confidence": 0.9}'
+        mock_client.responses.create.return_value = mock_response
+        MockOpenAI.return_value = mock_client
+
+        settings = Settings(_env_file=None, groq_api_key="test_key", groq_model="test_model")
+        client = get_groq_client(settings)
+        request = TicketRequest(message="Your support team solved my problem quickly. Thank you!")
+        triage_ticket(request, settings, client)
+
+        mock_client.responses.create.assert_called_once()
+        args, kwargs = mock_client.responses.create.call_args
+        assert kwargs['instructions'] == get_system_prompt()
