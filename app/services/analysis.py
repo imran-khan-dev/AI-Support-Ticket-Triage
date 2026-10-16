@@ -1,7 +1,7 @@
 import json
 from typing import Optional
 
-from openai import OpenAI
+from openai import OpenAI, Timeout
 
 from app.config import Settings
 from app.schemas import TicketRequest, AnalysisResponse
@@ -22,6 +22,8 @@ def get_groq_client(settings: Settings) -> Optional[OpenAI]:
     return OpenAI(
         api_key=settings.groq_api_key,
         base_url=settings.groq_base_url,
+        max_retries=2,
+        timeout=Timeout(timeout=60.0, connect=5.0),
     )
 
 

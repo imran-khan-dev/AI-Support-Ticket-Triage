@@ -3,6 +3,8 @@ import pytest
 from unittest.mock import Mock, patch
 from pydantic import ValidationError
 
+from openai import Timeout
+
 from app.schemas import TicketRequest, AnalysisResponse
 from app.config import Settings
 from app.services.analysis import (
@@ -80,7 +82,41 @@ def test_analyze_uses_custom_base_url():
 
         settings = Settings(_env_file=None, groq_api_key="test_key", groq_model="test_model", groq_base_url="https://custom.example.com")
         client = get_groq_client(settings)
-        MockOpenAI.assert_called_once_with(api_key="test_key", base_url="https://custom.example.com")
+
+        MockOpenAI.assert_called_once()
+        args, kwargs = MockOpenAI.call_args
+        assert kwargs['api_key'] == "test_key"
+        assert kwargs['base_url'] == "https://custom.example.com"
+        assert kwargs['max_retries'] == 2
+
+
+def test_get_groq_client_sets_max_retries():
+    """get_groq_client configures max_retries=2 for SDK retry behavior."""
+    with patch('app.services.analysis.OpenAI') as MockOpenAI:
+        mock_client = Mock()
+        MockOpenAI.return_value = mock_client
+
+        settings = Settings(_env_file=None, groq_api_key="test_key", groq_model="test_model")
+        client = get_groq_client(settings)
+
+        MockOpenAI.assert_called_once()
+        args, kwargs = MockOpenAI.call_args
+        assert kwargs['max_retries'] == 2
+
+
+def test_get_groq_client_sets_timeout():
+    """get_groq_client configures a bounded 60s request timeout with 5s connect timeout."""
+    with patch('app.services.analysis.OpenAI') as MockOpenAI:
+        mock_client = Mock()
+        MockOpenAI.return_value = mock_client
+
+        settings = Settings(_env_file=None, groq_api_key="test_key", groq_model="test_model")
+        client = get_groq_client(settings)
+
+        MockOpenAI.assert_called_once()
+        args, kwargs = MockOpenAI.call_args
+        assert kwargs['timeout'].connect == 5.0
+        assert kwargs['timeout'].read == 60.0
 
 
 def test_analyze_handles_invalid_json_from_groq():

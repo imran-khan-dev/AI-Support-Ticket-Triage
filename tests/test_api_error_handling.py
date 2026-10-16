@@ -97,6 +97,58 @@ def test_provider_invalid_confidence_returns_502():
         assert "api_key" not in detail.lower()
 
 
+def test_invalid_json_from_provider_returns_502():
+    """Invalid JSON from the provider returns safe 502 without leaking details."""
+    mock_client = Mock()
+    mock_response = Mock()
+    mock_response.output_text = 'invalid json'
+    mock_client.responses.create.return_value = mock_response
+
+    with patch('main.groq_client', mock_client):
+        response = client.post(
+            "/api/v1/tickets/triage",
+            json={"message": "Hello, I need help."},
+        )
+        assert response.status_code == 502
+        detail = response.json().get("detail", "")
+        # Safe generic message, raw JSON error text not leaked
+        assert "invalid json" not in detail
+        assert "api_key" not in detail.lower()
+
+
+def test_empty_output_text_from_provider_returns_502():
+    """Empty output_text from the provider returns safe 502 without leaking details."""
+    mock_client = Mock()
+    mock_response = Mock()
+    mock_response.output_text = ''
+    mock_client.responses.create.return_value = mock_response
+
+    with patch('main.groq_client', mock_client):
+        response = client.post(
+            "/api/v1/tickets/triage",
+            json={"message": "Hello, I need help."},
+        )
+        assert response.status_code == 502
+        detail = response.json().get("detail", "")
+        assert "api_key" not in detail.lower()
+
+
+def test_missing_output_text_attribute_returns_502():
+    """Provider response missing the output_text attribute returns safe 502."""
+    mock_client = Mock()
+    mock_response = Mock(spec_set=[])  # no attributes are accessible
+    mock_client.responses.create.return_value = mock_response
+
+    with patch('main.groq_client', mock_client):
+        response = client.post(
+            "/api/v1/tickets/triage",
+            json={"message": "Hello, I need help."},
+        )
+        assert response.status_code == 502
+        detail = response.json().get("detail", "")
+        assert "api_key" not in detail.lower()
+
+
 def test_invalid_request_still_returns_422():
     """Invalid request input still returns 422."""
     response = client.post(
