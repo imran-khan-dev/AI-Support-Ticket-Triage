@@ -3,4 +3,4 @@ uvicorn
 pydantic-settings
 pytest
 httpx
-groq
+openai

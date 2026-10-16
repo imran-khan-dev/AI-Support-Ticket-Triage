@@ -4,16 +4,13 @@ from unittest.mock import Mock, patch
 
 from main import app
 from app.schemas import TriageResponse
-from app.config import Settings
-from app.services.triage import TriageService
 
 client = TestClient(app)
 
 
 def test_successful_triage_request():
     """A successful triage request returns the expected schema and status."""
-    mock_svc = TriageService(Settings(_env_file=None))
-    with patch('main.triage_service', mock_svc):
+    with patch('main.groq_client', None):
         response = client.post(
             "/api/v1/tickets/triage",
             json={"message": "Hello, I need help."},
@@ -31,8 +28,8 @@ def test_successful_triage_request():
 
 def test_provider_failure_returns_502():
     """A simulated provider failure returns 502 and a safe error message."""
-    with patch('main.triage_service') as mock_service:
-        mock_service.triage.side_effect = Exception("Simulated provider failure")
+    with patch('main.triage_ticket') as mock_triage_fn:
+        mock_triage_fn.side_effect = Exception("Simulated provider failure")
         response = client.post(
             "/api/v1/tickets/triage",
             json={"message": "Hello, I need help."},
@@ -48,8 +45,8 @@ def test_provider_failure_returns_502():
 
 def test_provider_failure_does_not_leak_secrets():
     """Response does not contain simulated secret or raw exception details."""
-    with patch('main.triage_service') as mock_service:
-        mock_service.triage.side_effect = Exception("Connection failed with api_key=supersecret123")
+    with patch('main.triage_ticket') as mock_triage_fn:
+        mock_triage_fn.side_effect = Exception("Connection failed with api_key=supersecret123")
         response = client.post(
             "/api/v1/tickets/triage",
             json={"message": "Hello, I need help."},
@@ -64,9 +61,9 @@ def test_provider_failure_does_not_leak_secrets():
 
 def test_malformed_provider_output_returns_502():
     """Malformed provider output (validation error) returns safe 502."""
-    with patch('main.triage_service') as mock_service:
+    with patch('main.triage_ticket') as mock_triage_fn:
         from pydantic import ValidationError
-        mock_service.triage.side_effect = ValidationError.from_exception_data(
+        mock_triage_fn.side_effect = ValidationError.from_exception_data(
             "TriageResponse",
             [{"type": "missing", "loc": ("category",), "input": {}}],
         )
@@ -82,9 +79,9 @@ def test_malformed_provider_output_returns_502():
 
 def test_provider_invalid_confidence_returns_502():
     """Provider output missing confidence returns safe 502."""
-    with patch('main.triage_service') as mock_service:
+    with patch('main.triage_ticket') as mock_triage_fn:
         from pydantic import ValidationError
-        mock_service.triage.side_effect = ValidationError.from_exception_data(
+        mock_triage_fn.side_effect = ValidationError.from_exception_data(
             "TriageResponse",
             [{"type": "missing", "loc": ("confidence",), "input": {}}],
         )
@@ -130,8 +127,7 @@ def test_invalid_request_too_long_returns_422():
 
 def test_mock_mode_works_without_api_key():
     """Mock mode works without a configured API key."""
-    mock_svc = TriageService(Settings(_env_file=None))
-    with patch('main.triage_service', mock_svc):
+    with patch('main.groq_client', None):
         response = client.post(
             "/api/v1/tickets/triage",
             json={"message": "Test mock mode"},

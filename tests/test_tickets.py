@@ -4,7 +4,6 @@ from unittest.mock import patch
 from pydantic import ValidationError
 from fastapi.testclient import TestClient
 from app.schemas import TicketRequest, TriageResponse
-from app.services.triage import TriageService
 from app.config import Settings
 from main import app
 
@@ -170,9 +169,8 @@ def test_health_endpoint():
     assert response.json() == {"status": "healthy"}
 
 def test_triage_endpoint_valid_request():
-    """Test the triage endpoint with a valid request."""
-    mock_svc = TriageService(Settings(_env_file=None))
-    with patch('main.triage_service', mock_svc):
+    """Test the triage endpoint with a valid request (mock mode, no API key)."""
+    with patch('main.groq_client', None):
         response = client.post(
             "/api/v1/tickets/triage",
             json={"message": "Hello, I need help."},

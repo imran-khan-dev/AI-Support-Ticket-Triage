@@ -1,9 +1,9 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import ValidationError
 
-from app.schemas import TicketRequest, TriageResponse
-from app.services.triage import TriageService
 from app.config import Settings
+from app.schemas import TicketRequest, TriageResponse
+from app.services.triage import get_groq_client, triage_ticket
 
 app = FastAPI(
     title="AI Support Ticket Triage",
@@ -12,17 +12,18 @@ app = FastAPI(
                 "Groq API key is optional and can be set via GROQ_API_KEY environment variable.",
 )
 
-# Instantiate the triage service
-triage_service = TriageService(Settings())
-
-# Instantiate settings (for potential use in dependencies or future features)
+# Explicit, predictable dependencies: load settings once and resolve the Groq
+# client up front. A missing GROQ_MODEL with a configured GROQ_API_KEY raises
+# here with a clear configuration error rather than mid-request.
 settings = Settings()
+groq_client = get_groq_client(settings)
+
 
 @app.post("/api/v1/tickets/triage", response_model=TriageResponse)
-async def triage_ticket(request: TicketRequest):
+async def triage_ticket_endpoint(request: TicketRequest):
     """Triages a support ticket and returns the category, priority, sentiment, summary, and whether human review is required. Note: This endpoint uses a deterministic mock triage service when no Groq API key is configured, and uses the Groq API when a key is provided."""
     try:
-        return triage_service.triage(request)
+        return triage_ticket(request, settings, groq_client)
     except HTTPException:
         raise
     except ValidationError:
@@ -35,6 +36,7 @@ async def triage_ticket(request: TicketRequest):
             status_code=502,
             detail="Provider service is temporarily unavailable.",
         )
+
 
 @app.get("/health")
 async def health_check():

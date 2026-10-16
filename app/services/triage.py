@@ -1,90 +1,86 @@
 import json
 from typing import Optional
 
-from groq import Groq
-from pydantic import ValidationError
+from openai import OpenAI
 
-from app.schemas import TicketRequest, TriageResponse
 from app.config import Settings
+from app.schemas import TicketRequest, TriageResponse
 
 
-class TriageService:
-    """Triage service that uses Groq when API key is available, otherwise returns a mock response.
+def get_groq_client(settings: Settings) -> Optional[OpenAI]:
+    """Initialize and return an OpenAI client configured for Groq, or None for mock mode.
+
+    Raises ValueError when GROQ_API_KEY is configured without GROQ_MODEL so the
+    misconfiguration is surfaced clearly instead of failing at request time.
     """
-    def __init__(self, settings: Settings):
-        self.settings = settings
-        self._client: Optional[Groq] = None
-        if self.settings.groq_api_key:
-            if not self.settings.groq_model:
-                raise ValueError(
-                    "GROQ_MODEL must be set when GROQ_API_KEY is provided"
-                )
-            self._client = Groq(
-                api_key=self.settings.groq_api_key,
-                base_url=self.settings.groq_base_url
-            )
-
-    def triage(self, request: TicketRequest) -> TriageResponse:
-        """Triages a support ticket request.
-        If Groq API key is configured, uses Groq to classify the ticket.
-        Otherwise, returns a deterministic mock response.
-        Args:
-            request: A validated TicketRequest.
-        Returns:
-            A TriageResponse.
-        """
-        if not self._client:
-            return self._mock_triage()
-
-        try:
-            completion = self._client.chat.completions.create(
-                model=self.settings.groq_model,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": self._get_system_prompt(),
-                    },
-                    {
-                        "role": "user",
-                        "content": request.message,
-                    },
-                ],
-                temperature=0.0,
-                response_format={"type": "json_object"},
-            )
-            response_text = completion.choices[0].message.content
-            response_data = json.loads(response_text)
-            return TriageResponse(**response_data)
-        except Exception as e:
-            # In a production setting, we might want to log the error and return a fallback.
-            # However, the requirement is not to silently hide Groq failures behind mock responses.
-            # We will re-raise the exception so that the endpoint returns a 500 error.
-            raise e
-
-    def _mock_triage(self) -> TriageResponse:
-        """Return a deterministic mock triage response."""
-        return TriageResponse(
-            category="technical",
-            priority="medium",
-            sentiment="neutral",
-            summary="This is a mock summary.",
-            requires_human_review=False,
-            confidence=0.85,
+    if not settings.groq_api_key:
+        return None
+    if not settings.groq_model:
+        raise ValueError(
+            "GROQ_MODEL must be set when GROQ_API_KEY is provided"
         )
+    return OpenAI(
+        api_key=settings.groq_api_key,
+        base_url=settings.groq_base_url,
+    )
 
-    def _get_system_prompt(self) -> str:
-        """Return the system prompt for the Groq model."""
-        return (
-            "You are a support ticket triage assistant. Your task is to classify the user's message "
-            "into a category, priority, sentiment, and provide a summary. "
-            "You must respond with a valid JSON object that matches the following schema: "
-            "{"
-            "\"category\": \"billing | technical | account_access | bug_report | feature_request | other\", "
-            "\"priority\": \"low | medium | high | urgent\", "
-            "\"sentiment\": \"positive | neutral | frustrated | angry\", "
-            "\"summary\": \"a brief summary of the ticket (max 200 characters)\", "
-            "\"requires_human_review\": \"true | false\", "
-            "\"confidence\": \"a number between 0.0 and 1.0\""
-            "}"
-            "Only output the JSON object, no additional text."
-        )
+
+def mock_triage() -> TriageResponse:
+    """Return a deterministic mock triage response."""
+    return TriageResponse(
+        category="technical",
+        priority="medium",
+        sentiment="neutral",
+        summary="This is a mock summary.",
+        requires_human_review=False,
+        confidence=0.85,
+    )
+
+
+def get_system_prompt() -> str:
+    """Return the system prompt for the Groq model."""
+    return (
+        "You are a support ticket triage assistant. Your task is to classify the user's message "
+        "into a category, priority, sentiment, and provide a summary. "
+        "You must respond with a valid JSON object that matches the following schema: "
+        "{"
+        "\"category\": \"billing | technical | account_access | bug_report | feature_request | other\", "
+        "\"priority\": \"low | medium | high | urgent\", "
+        "\"sentiment\": \"positive | neutral | frustrated | angry\", "
+        "\"summary\": \"a brief summary of the ticket (max 200 characters)\", "
+        "\"requires_human_review\": \"true | false\", "
+        "\"confidence\": \"a number between 0.0 and 1.0\""
+        "}"
+        "Only output the JSON object, no additional text."
+    )
+
+
+def triage_ticket(
+    request: TicketRequest,
+    settings: Settings,
+    client: Optional[OpenAI] = None,
+) -> TriageResponse:
+    """Triages a support ticket request.
+
+    Uses the Groq Responses API (via the OpenAI SDK) when a client is provided;
+    otherwise returns a deterministic mock response. Provider and validation
+    errors are propagated to the caller.
+    """
+    if client is None:
+        return mock_triage()
+
+    response = client.responses.create(
+        model=settings.groq_model,
+        instructions=get_system_prompt(),
+        input=[
+            {
+                "role": "user",
+                "content": request.message,
+            },
+        ],
+        temperature=0.0,
+        text={"format": {"type": "json_object"}},
+    )
+    response_text = response.output_text
+    response_data = json.loads(response_text)
+    return TriageResponse(**response_data)
