@@ -29,7 +29,7 @@ def test_triage_service_handles_missing_confidence_from_groq():
         mock_client.chat.completions.create.return_value = mock_completion
         MockGroq.return_value = mock_client
 
-        settings = Settings(_env_file=None, groq_api_key="test_key")
+        settings = Settings(_env_file=None, groq_api_key="test_key", groq_model="test_model")
         service = TriageService(settings)
         request = TicketRequest(message="Hello")
         with pytest.raises(Exception):  # Pydantic will raise a ValidationError
@@ -78,7 +78,7 @@ def test_triage_service_uses_custom_base_url():
         mock_client = Mock()
         MockGroq.return_value = mock_client
 
-        settings = Settings(_env_file=None, groq_api_key="test_key", groq_base_url="https://custom.example.com")
+        settings = Settings(_env_file=None, groq_api_key="test_key", groq_model="test_model", groq_base_url="https://custom.example.com")
         service = TriageService(settings)
         # The client is initialized in __init__, so we can check the mock was called with the base_url
         MockGroq.assert_called_once_with(api_key="test_key", base_url="https://custom.example.com")
@@ -97,7 +97,7 @@ def test_triage_service_handles_invalid_json_from_groq():
         mock_client.chat.completions.create.return_value = mock_completion
         MockGroq.return_value = mock_client
 
-        settings = Settings(_env_file=None, groq_api_key="test_key")
+        settings = Settings(_env_file=None, groq_api_key="test_key", groq_model="test_model")
         service = TriageService(settings)
         request = TicketRequest(message="Hello")
         with pytest.raises(Exception):  # json.loads will raise JSONDecodeError
@@ -117,7 +117,7 @@ def test_triage_service_handles_missing_fields_from_groq():
         mock_client.chat.completions.create.return_value = mock_completion
         MockGroq.return_value = mock_client
 
-        settings = Settings(_env_file=None, groq_api_key="test_key")
+        settings = Settings(_env_file=None, groq_api_key="test_key", groq_model="test_model")
         service = TriageService(settings)
         request = TicketRequest(message="Hello")
         with pytest.raises(Exception):  # Pydantic will raise a ValidationError
@@ -131,8 +131,15 @@ def test_triage_service_propagates_groq_errors():
         mock_client.chat.completions.create.side_effect = Exception("Groq error")
         MockGroq.return_value = mock_client
 
-        settings = Settings(_env_file=None, groq_api_key="test_key")
+        settings = Settings(_env_file=None, groq_api_key="test_key", groq_model="test_model")
         service = TriageService(settings)
         request = TicketRequest(message="Hello")
         with pytest.raises(Exception, match="Groq error"):
             service.triage(request)
+
+
+def test_triage_service_raises_when_api_key_set_but_model_missing():
+    """Test that TriageService raises a clear error when API key is set but model is missing."""
+    settings = Settings(_env_file=None, groq_api_key="test_key")
+    with pytest.raises(ValueError, match="GROQ_MODEL must be set"):
+        TriageService(settings)

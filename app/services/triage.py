@@ -15,6 +15,10 @@ class TriageService:
         self.settings = settings
         self._client: Optional[Groq] = None
         if self.settings.groq_api_key:
+            if not self.settings.groq_model:
+                raise ValueError(
+                    "GROQ_MODEL must be set when GROQ_API_KEY is provided"
+                )
             self._client = Groq(
                 api_key=self.settings.groq_api_key,
                 base_url=self.settings.groq_base_url

@@ -40,3 +40,6 @@ async def triage_ticket(request: TicketRequest):
 async def health_check():
     """Health check endpoint."""
     return {"status": "healthy"}
+
+
+# uvicorn main:app --reload

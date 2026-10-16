@@ -1,10 +1,12 @@
 
 import pytest
+from unittest.mock import patch
 from pydantic import ValidationError
 from fastapi.testclient import TestClient
 from app.schemas import TicketRequest, TriageResponse
-from app.main import app
+from app.services.triage import TriageService
 from app.config import Settings
+from main import app
 
 client = TestClient(app)
 
@@ -169,22 +171,24 @@ def test_health_endpoint():
 
 def test_triage_endpoint_valid_request():
     """Test the triage endpoint with a valid request."""
-    response = client.post(
-        "/api/v1/tickets/triage",
-        json={"message": "Hello, I need help."},
-    )
-    assert response.status_code == 200
-    json_data = response.json()
-    # Check that the response has the expected fields and values from the mock service
-    assert json_data["category"] == "technical"
-    assert json_data["priority"] == "medium"
-    assert json_data["sentiment"] == "neutral"
-    assert json_data["summary"] == "This is a mock summary."
-    assert json_data["requires_human_review"] is False
-    assert 0.0 <= json_data["confidence"] <= 1.0
-    # Additionally, validate that the response conforms to TriageResponse schema
-    # by attempting to create a TriageResponse instance (should not raise)
-    TriageResponse(**json_data)
+    mock_svc = TriageService(Settings(_env_file=None))
+    with patch('main.triage_service', mock_svc):
+        response = client.post(
+            "/api/v1/tickets/triage",
+            json={"message": "Hello, I need help."},
+        )
+        assert response.status_code == 200
+        json_data = response.json()
+        # Check that the response has the expected fields and values from the mock service
+        assert json_data["category"] == "technical"
+        assert json_data["priority"] == "medium"
+        assert json_data["sentiment"] == "neutral"
+        assert json_data["summary"] == "This is a mock summary."
+        assert json_data["requires_human_review"] is False
+        assert 0.0 <= json_data["confidence"] <= 1.0
+        # Additionally, validate that the response conforms to TriageResponse schema
+        # by attempting to create a TriageResponse instance (should not raise)
+        TriageResponse(**json_data)
 
 def test_triage_endpoint_empty_message():
     """Test the triage endpoint with an empty message."""
@@ -229,3 +233,46 @@ def test_settings_with_groq_api_key(monkeypatch):
     # Create a new Settings instance, not loading from .env file
     settings = Settings(_env_file=None)
     assert settings.groq_api_key == "test_groq_key"
+
+
+def test_settings_reads_groq_model_from_env(monkeypatch):
+    """Test that settings reads GROQ_MODEL from environment variable."""
+    monkeypatch.setenv("GROQ_MODEL", "llama-3.1-8b-instant")
+    settings = Settings(_env_file=None)
+    assert settings.groq_model == "llama-3.1-8b-instant"
+
+
+def test_settings_reads_groq_base_url_from_env(monkeypatch):
+    """Test that settings reads GROQ_BASE_URL from environment variable."""
+    monkeypatch.setenv("GROQ_BASE_URL", "https://custom.groq.example.com")
+    settings = Settings(_env_file=None)
+    assert settings.groq_base_url == "https://custom.groq.example.com"
+
+
+def test_settings_groq_model_none_when_not_set(monkeypatch):
+    """Test that GROQ_MODEL is None when not set in environment."""
+    monkeypatch.delenv("GROQ_MODEL", raising=False)
+    settings = Settings(_env_file=None)
+    assert settings.groq_model is None
+
+
+def test_settings_groq_base_url_none_when_not_set(monkeypatch):
+    """Test that GROQ_BASE_URL is None when not set in environment."""
+    monkeypatch.delenv("GROQ_BASE_URL", raising=False)
+    settings = Settings(_env_file=None)
+    assert settings.groq_base_url is None
+
+
+def test_settings_loads_dotenv_file(tmp_path, monkeypatch):
+    """Test that Settings loads configuration from .env file by default."""
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "GROQ_API_KEY=dummy_key_12345\n"
+        "GROQ_MODEL=dummy_model\n"
+        "GROQ_BASE_URL=https://dummy.example.com\n"
+    )
+    monkeypatch.chdir(tmp_path)
+    settings = Settings()
+    assert settings.groq_api_key == "dummy_key_12345"
+    assert settings.groq_model == "dummy_model"
+    assert settings.groq_base_url == "https://dummy.example.com"
