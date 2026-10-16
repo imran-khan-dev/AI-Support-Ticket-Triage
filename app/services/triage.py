@@ -65,6 +65,7 @@ class TriageService:
             sentiment="neutral",
             summary="This is a mock summary.",
             requires_human_review=False,
+            confidence=0.85,
         )
 
     def _get_system_prompt(self) -> str:
@@ -78,7 +79,8 @@ class TriageService:
             "\"priority\": \"low | medium | high | urgent\", "
             "\"sentiment\": \"positive | neutral | frustrated | angry\", "
             "\"summary\": \"a brief summary of the ticket (max 200 characters)\", "
-            "\"requires_human_review\": \"true | false\""
+            "\"requires_human_review\": \"true | false\", "
+            "\"confidence\": \"a number between 0.0 and 1.0\""
             "}"
             "Only output the JSON object, no additional text."
         )

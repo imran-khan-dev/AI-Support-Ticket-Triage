@@ -44,6 +44,13 @@ class TriageResponse(BaseModel):
     requires_human_review: bool = Field(
         ..., description="Whether the ticket requires human review."
     )
+    confidence: float = Field(
+        ...,
+        description="Model-estimated confidence score for the triage output "
+        "(0.0 to 1.0, not a calibrated probability of correctness).",
+        ge=0.0,
+        le=1.0,
+    )
 
     @field_validator('summary', mode='before')
     @classmethod
