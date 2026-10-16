@@ -188,3 +188,26 @@ def test_triage_passes_refined_prompt_as_instructions():
         mock_client.responses.create.assert_called_once()
         args, kwargs = mock_client.responses.create.call_args
         assert kwargs['instructions'] == get_system_prompt()
+
+
+def test_get_system_prompt_defines_urgent_for_widespread_disruption():
+    """urgent is tied to widespread disruption or critical deadline, not just negative wording."""
+    prompt = get_system_prompt()
+    assert "widespread service or access disruption" in prompt
+    assert "immediate operational impact" in prompt
+    assert "critical deadline" in prompt
+    assert "multiple users" in prompt
+
+
+def test_get_system_prompt_defines_high_for_individual_issues():
+    """high covers significant individual issues below the urgent threshold."""
+    prompt = get_system_prompt()
+    assert "significant individual problem" in prompt
+
+
+def test_get_system_prompt_human_review_is_risk_based():
+    """Human review is risk-based; not automatic for every billing complaint or negative sentiment."""
+    prompt = get_system_prompt()
+    assert "genuinely need human judgment" in prompt
+    assert "Do not automatically require review for every billing complaint" in prompt
+    assert "disputed, unresolved, repeated, or complex payment cases" in prompt
