@@ -3,25 +3,30 @@ import pytest
 from unittest.mock import Mock, patch
 from pydantic import ValidationError
 
-from app.schemas import TicketRequest, TriageResponse
+from app.schemas import TicketRequest, AnalysisResponse
 from app.config import Settings
-from app.services.triage import get_groq_client, mock_triage, triage_ticket, get_system_prompt
+from app.services.analysis import (
+    get_groq_client,
+    mock_analysis,
+    analyze_ticket,
+    get_system_prompt,
+)
 
 
-def test_triage_uses_mock_when_no_api_key():
-    """Test that triage returns a mock response when no API key is set."""
+def test_analyze_uses_mock_when_no_api_key():
+    """Test that analyze returns a mock response when no API key is set."""
     settings = Settings(_env_file=None)  # Do not load from .env file
     client = get_groq_client(settings)
     assert client is None
     request = TicketRequest(message="Hello")
-    response = triage_ticket(request, settings, client)
-    assert response == mock_triage()
+    response = analyze_ticket(request, settings, client)
+    assert response == mock_analysis()
     assert 0.0 <= response.confidence <= 1.0
 
 
-def test_triage_handles_missing_confidence_from_groq():
-    """Test that triage raises ValidationError when Groq omits confidence."""
-    with patch('app.services.triage.OpenAI') as MockOpenAI:
+def test_analyze_handles_missing_confidence_from_groq():
+    """Test that analyze raises ValidationError when Groq omits confidence."""
+    with patch('app.services.analysis.OpenAI') as MockOpenAI:
         mock_client = Mock()
         mock_response = Mock()
         mock_response.output_text = '{"category": "billing", "priority": "high", "sentiment": "frustrated", "summary": "Test summary", "requires_human_review": true}'
@@ -32,12 +37,12 @@ def test_triage_handles_missing_confidence_from_groq():
         client = get_groq_client(settings)
         request = TicketRequest(message="Hello")
         with pytest.raises(ValidationError):
-            triage_ticket(request, settings, client)
+            analyze_ticket(request, settings, client)
 
 
-def test_triage_calls_groq_when_api_key_set():
-    """Test that triage calls Groq Responses API when API key is set."""
-    with patch('app.services.triage.OpenAI') as MockOpenAI:
+def test_analyze_calls_groq_when_api_key_set():
+    """Test that analyze calls Groq Responses API when API key is set."""
+    with patch('app.services.analysis.OpenAI') as MockOpenAI:
         mock_client = Mock()
         mock_response = Mock()
         mock_response.output_text = '{"category": "billing", "priority": "high", "sentiment": "frustrated", "summary": "Test summary", "requires_human_review": true, "confidence": 0.88}'
@@ -47,7 +52,7 @@ def test_triage_calls_groq_when_api_key_set():
         settings = Settings(_env_file=None, groq_api_key="test_key", groq_model="test_model")
         client = get_groq_client(settings)
         request = TicketRequest(message="Hello")
-        response = triage_ticket(request, settings, client)
+        response = analyze_ticket(request, settings, client)
 
         # Check that the Responses API was called with the expected arguments
         mock_client.responses.create.assert_called_once()
@@ -67,9 +72,9 @@ def test_triage_calls_groq_when_api_key_set():
         assert response.confidence == 0.88
 
 
-def test_triage_uses_custom_base_url():
+def test_analyze_uses_custom_base_url():
     """Test that get_groq_client uses the configured base URL."""
-    with patch('app.services.triage.OpenAI') as MockOpenAI:
+    with patch('app.services.analysis.OpenAI') as MockOpenAI:
         mock_client = Mock()
         MockOpenAI.return_value = mock_client
 
@@ -78,9 +83,9 @@ def test_triage_uses_custom_base_url():
         MockOpenAI.assert_called_once_with(api_key="test_key", base_url="https://custom.example.com")
 
 
-def test_triage_handles_invalid_json_from_groq():
-    """Test that triage raises when Groq returns invalid JSON."""
-    with patch('app.services.triage.OpenAI') as MockOpenAI:
+def test_analyze_handles_invalid_json_from_groq():
+    """Test that analyze raises when Groq returns invalid JSON."""
+    with patch('app.services.analysis.OpenAI') as MockOpenAI:
         mock_client = Mock()
         mock_response = Mock()
         mock_response.output_text = 'invalid json'
@@ -91,12 +96,12 @@ def test_triage_handles_invalid_json_from_groq():
         client = get_groq_client(settings)
         request = TicketRequest(message="Hello")
         with pytest.raises(Exception):  # json.loads will raise JSONDecodeError
-            triage_ticket(request, settings, client)
+            analyze_ticket(request, settings, client)
 
 
-def test_triage_handles_missing_fields_from_groq():
-    """Test that triage raises ValidationError when Groq returns missing fields."""
-    with patch('app.services.triage.OpenAI') as MockOpenAI:
+def test_analyze_handles_missing_fields_from_groq():
+    """Test that analyze raises ValidationError when Groq returns missing fields."""
+    with patch('app.services.analysis.OpenAI') as MockOpenAI:
         mock_client = Mock()
         mock_response = Mock()
         mock_response.output_text = '{"category": "billing", "priority": "high"}'  # missing sentiment, summary, requires_human_review
@@ -107,12 +112,12 @@ def test_triage_handles_missing_fields_from_groq():
         client = get_groq_client(settings)
         request = TicketRequest(message="Hello")
         with pytest.raises(ValidationError):
-            triage_ticket(request, settings, client)
+            analyze_ticket(request, settings, client)
 
 
-def test_triage_propagates_groq_errors():
-    """Test that triage propagates errors from the Groq client."""
-    with patch('app.services.triage.OpenAI') as MockOpenAI:
+def test_analyze_propagates_groq_errors():
+    """Test that analyze propagates errors from the Groq client."""
+    with patch('app.services.analysis.OpenAI') as MockOpenAI:
         mock_client = Mock()
         mock_client.responses.create.side_effect = Exception("Groq error")
         MockOpenAI.return_value = mock_client
@@ -121,7 +126,7 @@ def test_triage_propagates_groq_errors():
         client = get_groq_client(settings)
         request = TicketRequest(message="Hello")
         with pytest.raises(Exception, match="Groq error"):
-            triage_ticket(request, settings, client)
+            analyze_ticket(request, settings, client)
 
 
 def test_get_groq_client_raises_when_api_key_set_but_model_missing():
@@ -171,9 +176,9 @@ def test_get_system_prompt_defines_human_review_rules():
     assert "urgent" in prompt
 
 
-def test_triage_passes_refined_prompt_as_instructions():
+def test_analyze_passes_refined_prompt_as_instructions():
     """The service passes get_system_prompt() as the Responses API instructions argument."""
-    with patch('app.services.triage.OpenAI') as MockOpenAI:
+    with patch('app.services.analysis.OpenAI') as MockOpenAI:
         mock_client = Mock()
         mock_response = Mock()
         mock_response.output_text = '{"category": "other", "priority": "low", "sentiment": "positive", "summary": "Thanks for the help.", "requires_human_review": false, "confidence": 0.9}'
@@ -183,7 +188,7 @@ def test_triage_passes_refined_prompt_as_instructions():
         settings = Settings(_env_file=None, groq_api_key="test_key", groq_model="test_model")
         client = get_groq_client(settings)
         request = TicketRequest(message="Your support team solved my problem quickly. Thank you!")
-        triage_ticket(request, settings, client)
+        analyze_ticket(request, settings, client)
 
         mock_client.responses.create.assert_called_once()
         args, kwargs = mock_client.responses.create.call_args

@@ -2,13 +2,13 @@ from fastapi import FastAPI, HTTPException
 from pydantic import ValidationError
 
 from app.config import Settings
-from app.schemas import TicketRequest, TriageResponse
-from app.services.triage import get_groq_client, triage_ticket
+from app.schemas import TicketRequest, AnalysisResponse
+from app.services.analysis import get_groq_client, analyze_ticket
 
 app = FastAPI(
-    title="AI Support Ticket Triage",
+    title="AI Support Ticket Analysis",
     version="0.1.0",
-    description="A service to triage support tickets using AI. "
+    description="A service to analyze support tickets using AI. "
                 "Groq API key is optional and can be set via GROQ_API_KEY environment variable.",
 )
 
@@ -19,11 +19,11 @@ settings = Settings()
 groq_client = get_groq_client(settings)
 
 
-@app.post("/api/v1/tickets/triage", response_model=TriageResponse)
-async def triage_ticket_endpoint(request: TicketRequest):
-    """Triages a support ticket and returns the category, priority, sentiment, summary, and whether human review is required. Note: This endpoint uses a deterministic mock triage service when no Groq API key is configured, and uses the Groq API when a key is provided."""
+@app.post("/api/v1/tickets/triage", response_model=AnalysisResponse)
+async def analyze_ticket_endpoint(request: TicketRequest):
+    """Analyzes a support ticket and returns the category, priority, sentiment, summary, and whether human review is required. Note: This endpoint uses a deterministic mock analysis service when no Groq API key is configured, and uses the Groq API when a key is provided."""
     try:
-        return triage_ticket(request, settings, groq_client)
+        return analyze_ticket(request, settings, groq_client)
     except HTTPException:
         raise
     except ValidationError:

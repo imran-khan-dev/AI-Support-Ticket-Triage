@@ -2,10 +2,10 @@ from pydantic import BaseModel, Field, field_validator
 from typing import Literal
 
 class TicketRequest(BaseModel):
-    """Request model for ticket triage."""
+    """Request model for ticket analysis."""
     message: str = Field(
         ...,
-        description="The customer message to be triaged.",
+        description="The customer message to be analyzed.",
         min_length=1,
         max_length=10000,
         examples=["I cannot log into my account."],
@@ -18,8 +18,8 @@ class TicketRequest(BaseModel):
             return value.strip()
         return value
 
-class TriageResponse(BaseModel):
-    """Response model for ticket triage."""
+class AnalysisResponse(BaseModel):
+    """Response model for ticket analysis."""
     category: Literal[
         "billing",
         "technical",
@@ -46,7 +46,7 @@ class TriageResponse(BaseModel):
     )
     confidence: float = Field(
         ...,
-        description="Model-estimated confidence score for the triage output "
+        description="Model-estimated confidence score for the analysis output "
         "(0.0 to 1.0, not a calibrated probability of correctness).",
         ge=0.0,
         le=1.0,

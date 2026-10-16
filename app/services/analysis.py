@@ -4,7 +4,7 @@ from typing import Optional
 from openai import OpenAI
 
 from app.config import Settings
-from app.schemas import TicketRequest, TriageResponse
+from app.schemas import TicketRequest, AnalysisResponse
 
 
 def get_groq_client(settings: Settings) -> Optional[OpenAI]:
@@ -25,9 +25,9 @@ def get_groq_client(settings: Settings) -> Optional[OpenAI]:
     )
 
 
-def mock_triage() -> TriageResponse:
-    """Return a deterministic mock triage response."""
-    return TriageResponse(
+def mock_analysis() -> AnalysisResponse:
+    """Return a deterministic mock analysis response."""
+    return AnalysisResponse(
         category="technical",
         priority="medium",
         sentiment="neutral",
@@ -40,7 +40,7 @@ def mock_triage() -> TriageResponse:
 def get_system_prompt() -> str:
     """Return the system prompt for the Groq model."""
     return (
-        "You are a support ticket triage assistant. Classify the user's message "
+        "You are a support ticket analysis assistant. Classify the user's message "
         "into category, priority, sentiment, and summary, and decide whether human review is required. "
         "Respond with a valid JSON object matching this schema: "
         "{"
@@ -79,19 +79,19 @@ def get_system_prompt() -> str:
     )
 
 
-def triage_ticket(
+def analyze_ticket(
     request: TicketRequest,
     settings: Settings,
     client: Optional[OpenAI] = None,
-) -> TriageResponse:
-    """Triages a support ticket request.
+) -> AnalysisResponse:
+    """Analyzes a support ticket request.
 
     Uses the Groq Responses API (via the OpenAI SDK) when a client is provided;
     otherwise returns a deterministic mock response. Provider and validation
     errors are propagated to the caller.
     """
     if client is None:
-        return mock_triage()
+        return mock_analysis()
 
     response = client.responses.create(
         model=settings.groq_model,
@@ -107,4 +107,4 @@ def triage_ticket(
     )
     response_text = response.output_text
     response_data = json.loads(response_text)
-    return TriageResponse(**response_data)
+    return AnalysisResponse(**response_data)

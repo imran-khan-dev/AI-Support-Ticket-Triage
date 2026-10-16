@@ -9,11 +9,11 @@ class Settings(BaseSettings):
 
     groq_api_key: str | None = Field(
         default=None,
-        description="Groq API key for AI-powered triage (optional).",
+        description="Groq API key for AI-powered analysis (optional).",
     )
     groq_model: str | None = Field(
         default=None,
-        description="Groq model to use for triage. Required when GROQ_API_KEY is set.",
+        description="Groq model to use for analysis. Required when GROQ_API_KEY is set.",
     )
     groq_base_url: str | None = Field(
         default=None,

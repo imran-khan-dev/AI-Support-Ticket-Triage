@@ -1,14 +1,14 @@
-# AI Support Ticket Triage
+# AI Support Ticket Analysis
 
-A FastAPI backend that triages customer support tickets into category, priority, sentiment, and summary, and decides whether human review is required.
+A FastAPI backend that analyzes customer support tickets into category, priority, sentiment, and summary, and decides whether human review is required.
 
 ## Current capabilities
 
-- `POST /api/v1/tickets/triage` — triage a support ticket and return a validated response.
+- `POST /api/v1/tickets/triage` — analyze a support ticket and return a validated response.
 - `GET /health` — health check.
 - Interactive API docs at `/docs` (FastAPI/Swagger UI).
-- Deterministic mock triage when no Groq API key is configured.
-- Live AI-powered triage via the OpenAI SDK calling the Groq Responses API when `GROQ_API_KEY` and `GROQ_MODEL` are configured.
+- Deterministic mock analysis when no Groq API key is configured.
+- Live AI-powered analysis via the OpenAI SDK calling the Groq Responses API when `GROQ_API_KEY` and `GROQ_MODEL` are configured.
 - Environment-driven configuration using Pydantic Settings with `.env` support.
 - Request/response validation with Pydantic; invalid requests return HTTP 422, provider failures return HTTP 502 without leaking raw errors or secrets.
 
@@ -26,10 +26,10 @@ A FastAPI backend that triages customer support tickets into category, priority,
 │   ├── schemas.py         # Pydantic request/response models
 │   └── services/
 │       ├── __init__.py
-│       └── triage.py      # Triage logic: client, mock fallback, prompt, Responses API call
+│       └── analysis.py      # Analysis logic: client, mock fallback, prompt, Responses API call
 └── tests/
     ├── __init__.py
-    ├── test_triage_service.py
+    ├── test_analysis_service.py
     ├── test_tickets.py
     └── test_api_error_handling.py
 ```
@@ -38,11 +38,11 @@ A FastAPI backend that triages customer support tickets into category, priority,
 
 1. Client sends `POST /api/v1/tickets/triage` with a JSON body such as `{"message": "I cannot log into my account."}`.
 2. FastAPI validates the body against `TicketRequest` (message: non-empty string, max 10,000 characters, whitespace stripped). Invalid input returns HTTP 422.
-3. `triage_ticket()` in `app/services/triage.py` is called with the validated request, the loaded `Settings`, and the resolved Groq client.
-4. If no Groq API key is configured, the client is `None` and `mock_triage()` returns a deterministic response:
+3. `analyze_ticket()` in `app/services/analysis.py` is called with the validated request, the loaded `Settings`, and the resolved Groq client.
+4. If no Groq API key is configured, the client is `None` and `mock_analysis()` returns a deterministic response:
    - category: `technical`, priority: `medium`, sentiment: `neutral`, summary: `This is a mock summary.`, requires_human_review: `false`, confidence: `0.85`.
-5. If a Groq API key is configured, the OpenAI SDK calls the Groq Responses API (`responses.create`) using the configured model, base URL, and system prompt, with `temperature=0.0` and JSON-object output format. The model's `output_text` is parsed as JSON and validated against `TriageResponse`.
-6. The validated `TriageResponse` is returned to the client. Provider or validation errors map to HTTP 502 with a safe message; raw exceptions and secrets are never exposed.
+5. If a Groq API key is configured, the OpenAI SDK calls the Groq Responses API (`responses.create`) using the configured model, base URL, and system prompt, with `temperature=0.0` and JSON-object output format. The model's `output_text` is parsed as JSON and validated against `AnalysisResponse`.
+6. The validated `AnalysisResponse` is returned to the client. Provider or validation errors map to HTTP 502 with a safe message; raw exceptions and secrets are never exposed.
 
 ## Setup on Windows PowerShell
 
@@ -83,13 +83,13 @@ GROQ_BASE_URL=https://api.groq.com/openai/v1
 
 | Variable | Required? | Description | Default |
 |---|---|---|---|
-| `GROQ_API_KEY` | Optional | Groq API key for AI-powered triage. | `None` (mock mode) |
-| `GROQ_MODEL` | Required when `GROQ_API_KEY` is set | Groq model to use for triage. | `None` |
+| `GROQ_API_KEY` | Optional | Groq API key for AI-powered analysis (optional). | `None` (mock mode) |
+| `GROQ_MODEL` | Required when `GROQ_API_KEY` is set | Groq model to use for analysis. | `None` |
 | `GROQ_BASE_URL` | Optional | Base URL for the Groq API. | `None` |
 
 ### Behavior without live AI configuration
 
-If `GROQ_API_KEY` is not set, the Groq client is `None` and the endpoint uses the deterministic mock triage response described above. This lets you develop and test without a Groq account.
+If `GROQ_API_KEY` is not set, the Groq client is `None` and the endpoint uses the deterministic mock analysis response described above. This lets you develop and test without a Groq account.
 
 If `GROQ_API_KEY` is set but `GROQ_MODEL` is not, the application raises a clear configuration error at startup rather than failing mid-request.
 
@@ -119,7 +119,7 @@ Invoke-RestMethod -Uri "http://127.0.0.1:8000/health" -Method Get
 
 Returns `{"status": "healthy"}`.
 
-### Triage a ticket
+### Analyze a ticket
 
 ```powershell
 $body = @{ message = "I cannot log into my account." } | ConvertTo-Json
@@ -158,7 +158,7 @@ From the repository root, with the virtual environment activated:
 python -m pytest -v
 ```
 
-Tests are mocked and do not require a real Groq API key or make paid API requests. The suite currently has 52 passing tests covering schema validation, mock triage, mocked Groq triage, environment-driven configuration, missing model configuration, custom base URL, invalid provider output, provider error handling, confidence validation, health endpoint behavior, and independence from the developer's real `.env` file.
+Tests are mocked and do not require a real Groq API key or make paid API requests. The suite currently has 52 passing tests covering schema validation, mock analysis, mocked Groq analysis, environment-driven configuration, missing model configuration, custom base URL, invalid provider output, provider error handling, confidence validation, health endpoint behavior, and independence from the developer's real `.env` file.
 
 ## Limitations
 

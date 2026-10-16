@@ -3,13 +3,13 @@ from fastapi.testclient import TestClient
 from unittest.mock import Mock, patch
 
 from main import app
-from app.schemas import TriageResponse
+from app.schemas import AnalysisResponse
 
 client = TestClient(app)
 
 
-def test_successful_triage_request():
-    """A successful triage request returns the expected schema and status."""
+def test_successful_analysis_request():
+    """A successful analysis request returns the expected schema and status."""
     with patch('main.groq_client', None):
         response = client.post(
             "/api/v1/tickets/triage",
@@ -18,7 +18,7 @@ def test_successful_triage_request():
         assert response.status_code == 200
         json_data = response.json()
         # Validate against schema
-        TriageResponse(**json_data)
+        AnalysisResponse(**json_data)
         assert "category" in json_data
         assert "priority" in json_data
         assert "sentiment" in json_data
@@ -28,8 +28,8 @@ def test_successful_triage_request():
 
 def test_provider_failure_returns_502():
     """A simulated provider failure returns 502 and a safe error message."""
-    with patch('main.triage_ticket') as mock_triage_fn:
-        mock_triage_fn.side_effect = Exception("Simulated provider failure")
+    with patch('main.analyze_ticket') as mock_analysis_fn:
+        mock_analysis_fn.side_effect = Exception("Simulated provider failure")
         response = client.post(
             "/api/v1/tickets/triage",
             json={"message": "Hello, I need help."},
@@ -45,8 +45,8 @@ def test_provider_failure_returns_502():
 
 def test_provider_failure_does_not_leak_secrets():
     """Response does not contain simulated secret or raw exception details."""
-    with patch('main.triage_ticket') as mock_triage_fn:
-        mock_triage_fn.side_effect = Exception("Connection failed with api_key=supersecret123")
+    with patch('main.analyze_ticket') as mock_analysis_fn:
+        mock_analysis_fn.side_effect = Exception("Connection failed with api_key=supersecret123")
         response = client.post(
             "/api/v1/tickets/triage",
             json={"message": "Hello, I need help."},
@@ -61,10 +61,10 @@ def test_provider_failure_does_not_leak_secrets():
 
 def test_malformed_provider_output_returns_502():
     """Malformed provider output (validation error) returns safe 502."""
-    with patch('main.triage_ticket') as mock_triage_fn:
+    with patch('main.analyze_ticket') as mock_analysis_fn:
         from pydantic import ValidationError
-        mock_triage_fn.side_effect = ValidationError.from_exception_data(
-            "TriageResponse",
+        mock_analysis_fn.side_effect = ValidationError.from_exception_data(
+            "AnalysisResponse",
             [{"type": "missing", "loc": ("category",), "input": {}}],
         )
         response = client.post(
@@ -79,10 +79,10 @@ def test_malformed_provider_output_returns_502():
 
 def test_provider_invalid_confidence_returns_502():
     """Provider output missing confidence returns safe 502."""
-    with patch('main.triage_ticket') as mock_triage_fn:
+    with patch('main.analyze_ticket') as mock_analysis_fn:
         from pydantic import ValidationError
-        mock_triage_fn.side_effect = ValidationError.from_exception_data(
-            "TriageResponse",
+        mock_analysis_fn.side_effect = ValidationError.from_exception_data(
+            "AnalysisResponse",
             [{"type": "missing", "loc": ("confidence",), "input": {}}],
         )
         response = client.post(
@@ -133,7 +133,7 @@ def test_mock_mode_works_without_api_key():
             json={"message": "Test mock mode"},
         )
         assert response.status_code == 200
-        TriageResponse(**response.json())
+        AnalysisResponse(**response.json())
 
 
 def test_health_endpoint_unchanged():

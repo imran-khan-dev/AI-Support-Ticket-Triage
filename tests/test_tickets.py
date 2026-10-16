@@ -3,7 +3,7 @@ import pytest
 from unittest.mock import patch
 from pydantic import ValidationError
 from fastapi.testclient import TestClient
-from app.schemas import TicketRequest, TriageResponse
+from app.schemas import TicketRequest, AnalysisResponse
 from app.config import Settings
 from main import app
 
@@ -31,9 +31,9 @@ def test_ticket_request_max_length():
     with pytest.raises(ValidationError):
         TicketRequest(message=long_message)
 
-def test_valid_triage_response():
-    """Test that a valid triage output is accepted."""
-    resp = TriageResponse(
+def test_valid_analysis_response():
+    """Test that a valid analysis output is accepted."""
+    resp = AnalysisResponse(
         category="billing",
         priority="high",
         sentiment="frustrated",
@@ -49,10 +49,10 @@ def test_valid_triage_response():
     assert resp.confidence == 0.9
 
 
-def test_triage_response_confidence_below_range():
+def test_analysis_response_confidence_below_range():
     """Test that a confidence below 0.0 is rejected."""
     with pytest.raises(ValidationError):
-        TriageResponse(
+        AnalysisResponse(
             category="billing",
             priority="high",
             sentiment="frustrated",
@@ -62,10 +62,10 @@ def test_triage_response_confidence_below_range():
         )
 
 
-def test_triage_response_confidence_above_range():
+def test_analysis_response_confidence_above_range():
     """Test that a confidence above 1.0 is rejected."""
     with pytest.raises(ValidationError):
-        TriageResponse(
+        AnalysisResponse(
             category="billing",
             priority="high",
             sentiment="frustrated",
@@ -75,10 +75,10 @@ def test_triage_response_confidence_above_range():
         )
 
 
-def test_triage_response_missing_confidence():
+def test_analysis_response_missing_confidence():
     """Test that omitting confidence is rejected."""
     with pytest.raises(ValidationError):
-        TriageResponse(
+        AnalysisResponse(
             category="billing",
             priority="high",
             sentiment="frustrated",
@@ -87,10 +87,10 @@ def test_triage_response_missing_confidence():
         )
 
 
-def test_triage_response_boundary_confidence_values():
+def test_analysis_response_boundary_confidence_values():
     """Test that confidence of 0.0 and 1.0 are accepted."""
     for value in (0.0, 1.0):
-        resp = TriageResponse(
+        resp = AnalysisResponse(
             category="billing",
             priority="high",
             sentiment="frustrated",
@@ -101,10 +101,10 @@ def test_triage_response_boundary_confidence_values():
         assert resp.confidence == value
 
 
-def test_triage_response_invalid_category():
+def test_analysis_response_invalid_category():
     """Test that an invalid category is rejected."""
     with pytest.raises(ValidationError):
-        TriageResponse(
+        AnalysisResponse(
             category="invalid",
             priority="high",
             sentiment="frustrated",
@@ -113,10 +113,10 @@ def test_triage_response_invalid_category():
             confidence=0.5,
         )
 
-def test_triage_response_invalid_priority():
+def test_analysis_response_invalid_priority():
     """Test that an invalid priority is rejected."""
     with pytest.raises(ValidationError):
-        TriageResponse(
+        AnalysisResponse(
             category="billing",
             priority="invalid",
             sentiment="frustrated",
@@ -125,10 +125,10 @@ def test_triage_response_invalid_priority():
             confidence=0.5,
         )
 
-def test_triage_response_invalid_sentiment():
+def test_analysis_response_invalid_sentiment():
     """Test that an invalid sentiment is rejected."""
     with pytest.raises(ValidationError):
-        TriageResponse(
+        AnalysisResponse(
             category="billing",
             priority="high",
             sentiment="invalid",
@@ -137,10 +137,10 @@ def test_triage_response_invalid_sentiment():
             confidence=0.5,
         )
 
-def test_triage_response_empty_summary():
+def test_analysis_response_empty_summary():
     """Test that an empty summary is rejected."""
     with pytest.raises(ValidationError):
-        TriageResponse(
+        AnalysisResponse(
             category="billing",
             priority="high",
             sentiment="frustrated",
@@ -149,10 +149,10 @@ def test_triage_response_empty_summary():
             confidence=0.5,
         )
 
-def test_triage_response_whitespace_summary():
+def test_analysis_response_whitespace_summary():
     """Test that a whitespace-only summary is rejected."""
     with pytest.raises(ValidationError):
-        TriageResponse(
+        AnalysisResponse(
             category="billing",
             priority="high",
             sentiment="frustrated",
@@ -168,8 +168,8 @@ def test_health_endpoint():
     assert response.status_code == 200
     assert response.json() == {"status": "healthy"}
 
-def test_triage_endpoint_valid_request():
-    """Test the triage endpoint with a valid request (mock mode, no API key)."""
+def test_analysis_endpoint_valid_request():
+    """Test the analysis endpoint with a valid request (mock mode, no API key)."""
     with patch('main.groq_client', None):
         response = client.post(
             "/api/v1/tickets/triage",
@@ -184,28 +184,28 @@ def test_triage_endpoint_valid_request():
         assert json_data["summary"] == "This is a mock summary."
         assert json_data["requires_human_review"] is False
         assert 0.0 <= json_data["confidence"] <= 1.0
-        # Additionally, validate that the response conforms to TriageResponse schema
-        # by attempting to create a TriageResponse instance (should not raise)
-        TriageResponse(**json_data)
+        # Additionally, validate that the response conforms to AnalysisResponse schema
+        # by attempting to create a AnalysisResponse instance (should not raise)
+        AnalysisResponse(**json_data)
 
-def test_triage_endpoint_empty_message():
-    """Test the triage endpoint with an empty message."""
+def test_analysis_endpoint_empty_message():
+    """Test the analysis endpoint with an empty message."""
     response = client.post(
         "/api/v1/tickets/triage",
         json={"message": ""},
     )
     assert response.status_code == 422  # Unprocessable Entity
 
-def test_triage_endpoint_whitespace_message():
-    """Test the triage endpoint with a whitespace-only message."""
+def test_analysis_endpoint_whitespace_message():
+    """Test the analysis endpoint with a whitespace-only message."""
     response = client.post(
         "/api/v1/tickets/triage",
         json={"message": "   "},
     )
     assert response.status_code == 422  # Unprocessable Entity
 
-def test_triage_endpoint_message_too_long():
-    """Test the triage endpoint with a message exceeding the maximum length."""
+def test_analysis_endpoint_message_too_long():
+    """Test the analysis endpoint with a message exceeding the maximum length."""
     long_message = "x" * 10001
     response = client.post(
         "/api/v1/tickets/triage",
