@@ -4,12 +4,12 @@ A service to triage support tickets using AI.
 
 ## Current Scope
 
-This milestone implements the project foundation, data contract, API endpoints, configuration, and Groq integration:
+This milestone implements configuration and environment variables:
 - Project structure with FastAPI
 - Pydantic schemas for ticket requests and triage responses
-- Triage service with optional Groq API integration (falls back to mock)
+- Deterministic mock triage service
 - Configuration using Pydantic Settings
-- Tests for schemas, API, and service
+- Tests for schemas, API, and configuration
 
 ## Setup
 
@@ -39,8 +39,6 @@ The application uses [Pydantic Settings](https://docs.pydantic.dev/latest/concep
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `GROQ_API_KEY` | Groq API key for AI-powered triage (optional) | `None` |
-| `GROQ_MODEL` | Groq model to use for triage | `mixtral-8x7b-32768` |
-| `GROQ_BASE_URL` | Base URL for the Groq API (optional) | `None` (uses Groq's default) |
 
 The application will start without a Groq API key, using the mock triage service.
 
@@ -51,8 +49,6 @@ To configure the application, create a `.env` file in the project root with the 
 Example `.env`:
 ```
 GROQ_API_KEY=your_groq_api_key_here
-GROQ_MODEL=mixtral-8x7b-32768
-GROQ_BASE_URL=https://api.groq.com
 ```
 
 ## Running Tests
@@ -65,6 +61,7 @@ pytest
 
 ## Next Steps
 
+- Implement the ticket triage endpoint with Groq API integration.
 - Add database persistence.
 - Implement authentication and authorization.
-- Enhance error handling and logging.
+
