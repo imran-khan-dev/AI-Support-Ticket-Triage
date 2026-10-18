@@ -28,12 +28,15 @@ class AnalysisResponse(BaseModel):
         "feature_request",
         "other",
     ] = Field(..., description="The category of the ticket.")
+
     priority: Literal["low", "medium", "high", "urgent"] = Field(
         ..., description="The priority of the ticket."
     )
+
     sentiment: Literal["positive", "neutral", "frustrated", "angry"] = Field(
         ..., description="The sentiment of the customer message."
     )
+
     summary: str = Field(
         ...,
         description="A brief summary of the ticket.",
@@ -41,9 +44,11 @@ class AnalysisResponse(BaseModel):
         max_length=200,
         examples=["Customer unable to log in."],
     )
+
     requires_human_review: bool = Field(
         ..., description="Whether the ticket requires human review."
     )
+
     confidence: float = Field(
         ...,
         description="Model-estimated confidence score for the analysis output "

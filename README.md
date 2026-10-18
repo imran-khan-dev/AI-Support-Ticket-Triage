@@ -4,7 +4,7 @@ A FastAPI backend that analyzes customer support tickets into category, priority
 
 ## Current capabilities
 
-- `POST /api/v1/tickets/triage` — analyze a support ticket and return a validated response.
+- `POST /api/v1/tickets/analyze` — analyze a support ticket and return a validated response.
 - `GET /health` — health check.
 - Interactive API docs at `/docs` (FastAPI/Swagger UI).
 - Deterministic mock analysis when no Groq API key is configured.
@@ -36,7 +36,7 @@ A FastAPI backend that analyzes customer support tickets into category, priority
 
 ## Request lifecycle
 
-1. Client sends `POST /api/v1/tickets/triage` with a JSON body such as `{"message": "I cannot log into my account."}`.
+1. Client sends `POST /api/v1/tickets/analyze` with a JSON body such as `{"message": "I cannot log into my account."}`.
 2. FastAPI validates the body against `TicketRequest` (message: non-empty string, max 10,000 characters, whitespace stripped). Invalid input returns HTTP 422.
 3. `analyze_ticket()` in `app/services/analysis.py` is called with the validated request, the loaded `Settings`, and the resolved Groq client.
 4. If no Groq API key is configured, the client is `None` and `mock_analysis()` returns a deterministic response:
@@ -123,7 +123,7 @@ Returns `{"status": "healthy"}`.
 
 ```powershell
 $body = @{ message = "I cannot log into my account." } | ConvertTo-Json
-Invoke-RestMethod -Uri "http://127.0.0.1:8000/api/v1/tickets/triage" -Method Post -Body $body -ContentType "application/json"
+Invoke-RestMethod -Uri "http://127.0.0.1:8000/api/v1/tickets/analyze" -Method Post -Body $body -ContentType "application/json"
 ```
 
 Example response:

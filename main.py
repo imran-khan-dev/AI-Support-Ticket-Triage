@@ -19,7 +19,7 @@ settings = Settings()
 groq_client = get_groq_client(settings)
 
 
-@app.post("/api/v1/tickets/triage", response_model=AnalysisResponse)
+@app.post("/api/v1/tickets/analyze", response_model=AnalysisResponse)
 async def analyze_ticket_endpoint(request: TicketRequest):
     """Analyzes a support ticket and returns the category, priority, sentiment, summary, and whether human review is required. Note: This endpoint uses a deterministic mock analysis service when no Groq API key is configured, and uses the Groq API when a key is provided."""
     try:

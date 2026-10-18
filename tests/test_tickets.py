@@ -172,7 +172,7 @@ def test_analysis_endpoint_valid_request():
     """Test the analysis endpoint with a valid request (mock mode, no API key)."""
     with patch('main.groq_client', None):
         response = client.post(
-            "/api/v1/tickets/triage",
+            "/api/v1/tickets/analyze",
             json={"message": "Hello, I need help."},
         )
         assert response.status_code == 200
@@ -191,7 +191,7 @@ def test_analysis_endpoint_valid_request():
 def test_analysis_endpoint_empty_message():
     """Test the analysis endpoint with an empty message."""
     response = client.post(
-        "/api/v1/tickets/triage",
+        "/api/v1/tickets/analyze",
         json={"message": ""},
     )
     assert response.status_code == 422  # Unprocessable Entity
@@ -199,7 +199,7 @@ def test_analysis_endpoint_empty_message():
 def test_analysis_endpoint_whitespace_message():
     """Test the analysis endpoint with a whitespace-only message."""
     response = client.post(
-        "/api/v1/tickets/triage",
+        "/api/v1/tickets/analyze",
         json={"message": "   "},
     )
     assert response.status_code == 422  # Unprocessable Entity
@@ -208,7 +208,7 @@ def test_analysis_endpoint_message_too_long():
     """Test the analysis endpoint with a message exceeding the maximum length."""
     long_message = "x" * 10001
     response = client.post(
-        "/api/v1/tickets/triage",
+        "/api/v1/tickets/analyze",
         json={"message": long_message},
     )
     assert response.status_code == 422  # Unprocessable Entity
