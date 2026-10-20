@@ -1,4 +1,7 @@
+import os
+
 from fastapi import FastAPI, HTTPException
+from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 
 from app.config import Settings
@@ -44,4 +47,13 @@ async def health_check():
     return {"status": "healthy"}
 
 
-# uvicorn main:app --reload
+# Serve the sibling frontend directory from the same origin as the API.
+# The path is resolved relative to this file (main.py) so it works regardless
+# of the current working directory. This mount is registered last so the API
+# routes above always take precedence over static file handling.
+_frontend_dir = os.path.normpath(
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "frontend")
+)
+app.mount("/", StaticFiles(directory=_frontend_dir, html=True), name="frontend")
+
+# python -m uvicorn main:app --reload
