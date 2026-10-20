@@ -28,8 +28,8 @@ from typing import Any
 
 from openai import OpenAI
 
-from app.config import Settings
-from app.services.tools import TOOL_REGISTRY, execute_tool
+from app.core.config import Settings
+from app.agent_core.tools import TOOL_REGISTRY, execute_tool
 
 
 class AgentResult:
@@ -167,7 +167,6 @@ def _extract_function_calls(output_items: list[Any]) -> list[Any]:
             calls.append(item)
     return calls
 
-
 def run_agent(
     message: str,
     settings: Settings,
@@ -222,7 +221,14 @@ def run_agent(
                 tools=tool_definitions,
                 temperature=0.0,
             )
-        except Exception:
+        except Exception as exc:
+            import logging
+
+            logging.getLogger("agent").exception(
+                "Agent loop iteration %d failed: %s",
+                iteration,
+                type(exc).__name__,
+            )
             return AgentResult(
                 status="provider_failure",
                 error="Provider service is temporarily unavailable.",
@@ -237,6 +243,32 @@ def run_agent(
         # If the model requests tool calls, execute each one and feed results
         # back to the model on the next iteration.
         if function_calls:
+            # Add the assistant's tool-call messages to the input so that
+            # Groq's Harmony renderer can associate each tool output with the
+            # tool call that produced it. Without these preceding messages,
+            # the renderer reports "Tools should have a name!" because it
+            # cannot find the tool call that a function_call_output refers to.
+            for item in output_items:
+                if getattr(item, "type", None) == "function_call":
+                    model_dump = getattr(item, "model_dump", None)
+                    if callable(model_dump):
+                        try:
+                            dumped = model_dump()
+                            if isinstance(dumped, dict):
+                                input_items.append(dumped)
+                                continue
+                        except Exception:
+                            pass
+                    input_items.append(
+                        {
+                            "id": getattr(item, "id", None),
+                            "type": "function_call",
+                            "call_id": getattr(item, "call_id", None),
+                            "name": getattr(item, "name", None),
+                            "arguments": getattr(item, "arguments", None),
+                        }
+                    )
+
             for tool_call in function_calls:
                 call_id = getattr(tool_call, "call_id", None)
                 tool_name = getattr(tool_call, "name", None)
@@ -266,13 +298,19 @@ def run_agent(
                 )
 
                 # Add the tool result to the input so the model can use it.
+                # The Responses API expects ``output`` to be a string (or list of
+                # content items), not a raw dict. Serialize the tool result as
+                # JSON so the SDK can send it to the provider. Include the tool
+                # name so Groq's Harmony renderer can associate the output with
+                # the tool that was called.
                 input_items.append(
                     {
                         "id": f"output_{iteration}_{len(input_items)}",
                         "type": "function_call_output",
                         "status": "completed",
                         "call_id": call_id,
-                        "output": result,
+                        "name": tool_name,
+                        "output": json.dumps(result),
                     }
                 )
 

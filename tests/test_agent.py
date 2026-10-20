@@ -3,8 +3,8 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from app.config import Settings
-from app.services.agent import AgentResult, MAX_ITERATIONS, run_agent
+from app.core.config import Settings
+from app.agent_core.agent import AgentResult, MAX_ITERATIONS, run_agent
 
 
 def _make_response(output_items=None, output_text=""):
@@ -452,7 +452,7 @@ def test_agent_mock_mode_without_api_key():
 
 def test_agent_does_not_affect_existing_analyze_service():
     """Sanity check: existing analysis service still works independently."""
-    from app.services.analysis import get_groq_client, mock_analysis
+    from app.agent_core.analysis import get_groq_client, mock_analysis
 
     settings = Settings(_env_file=None)
     client = get_groq_client(settings)

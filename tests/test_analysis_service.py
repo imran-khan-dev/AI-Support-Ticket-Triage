@@ -6,8 +6,8 @@ from pydantic import ValidationError
 from openai import Timeout
 
 from app.schemas import TicketRequest, AnalysisResponse
-from app.config import Settings
-from app.services.analysis import (
+from app.core.config import Settings
+from app.agent_core.analysis import (
     get_groq_client,
     mock_analysis,
     analyze_ticket,

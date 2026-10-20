@@ -12,7 +12,7 @@ a central execute_tool function validates and dispatches calls safely.
 
 from typing import Any
 
-from app.tool_schemas import LookupTicketHistoryArgs, SearchSupportDocsArgs
+from app.agent_core.tool_schemas import LookupTicketHistoryArgs, SearchSupportDocsArgs
 
 # ---------------------------------------------------------------------------
 # Fixture data: fictional support documentation

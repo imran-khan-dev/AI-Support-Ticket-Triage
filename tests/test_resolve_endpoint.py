@@ -9,7 +9,7 @@ client = TestClient(app)
 
 
 def _make_agent_result(status, answer=None, tool_calls=None, error=None):
-    from app.services.agent import AgentResult
+    from app.agent_core.agent import AgentResult
     return AgentResult(
         status=status,
         answer=answer,
