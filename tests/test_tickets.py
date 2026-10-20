@@ -4,7 +4,7 @@ from unittest.mock import patch
 from pydantic import ValidationError
 from fastapi.testclient import TestClient
 from app.schemas import TicketRequest, AnalysisResponse
-from app.config import Settings
+from app.core.config import Settings
 from main import app
 
 client = TestClient(app)

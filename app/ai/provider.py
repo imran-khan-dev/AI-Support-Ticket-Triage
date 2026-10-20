@@ -1,11 +1,7 @@
-import json
 from typing import Optional
 
 from openai import OpenAI, Timeout
-
-from app.config import Settings
-from app.schemas import TicketRequest, AnalysisResponse
-
+from app.core.config import Settings
 
 def get_groq_client(settings: Settings) -> Optional[OpenAI]:
     """Initialize and return an OpenAI client configured for Groq, or None for mock mode.
@@ -25,19 +21,6 @@ def get_groq_client(settings: Settings) -> Optional[OpenAI]:
         max_retries=2,
         timeout=Timeout(timeout=60.0, connect=5.0),
     )
-
-
-def mock_analysis() -> AnalysisResponse:
-    """Return a deterministic mock analysis response."""
-    return AnalysisResponse(
-        category="technical",
-        priority="medium",
-        sentiment="neutral",
-        summary="This is a mock summary.",
-        requires_human_review=False,
-        confidence=0.85,
-    )
-
 
 def get_system_prompt() -> str:
     """Return the system prompt for the Groq model."""
@@ -79,34 +62,3 @@ def get_system_prompt() -> str:
         "\nConfidence: a number between 0.0 and 1.0 representing your estimate, not a calibrated probability of correctness."
         "\n\nOnly output the JSON object, no additional text."
     )
-
-
-def analyze_ticket(
-    request: TicketRequest,
-    settings: Settings,
-    client: Optional[OpenAI] = None,
-) -> AnalysisResponse:
-    """Analyzes a support ticket request.
-
-    Uses the Groq Responses API (via the OpenAI SDK) when a client is provided;
-    otherwise returns a deterministic mock response. Provider and validation
-    errors are propagated to the caller.
-    """
-    if client is None:
-        return mock_analysis()
-
-    response = client.responses.create(
-        model=settings.groq_model,
-        instructions=get_system_prompt(),
-        input=[
-            {
-                "role": "user",
-                "content": request.message,
-            },
-        ],
-        temperature=0.0,
-        text={"format": {"type": "json_object"}},
-    )
-    response_text = response.output_text
-    response_data = json.loads(response_text)
-    return AnalysisResponse(**response_data)

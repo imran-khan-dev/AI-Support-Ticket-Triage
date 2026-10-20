@@ -1,8 +1,8 @@
 import pytest
 from pydantic import ValidationError
 
-from app.tool_schemas import LookupTicketHistoryArgs, SearchSupportDocsArgs
-from app.services.tools import execute_tool, search_support_docs, lookup_ticket_history
+from app.agent_core.tool_schemas import LookupTicketHistoryArgs, SearchSupportDocsArgs
+from app.agent_core.tools import execute_tool, search_support_docs, lookup_ticket_history
 
 
 # ---------------------------------------------------------------------------
