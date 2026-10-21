@@ -159,6 +159,7 @@ DATABASE_URL=postgresql://postgres:your_password@localhost:5432/ticket_triage
 | `GROQ_MODEL` | Required when `GROQ_API_KEY` is set | Groq model to use for analysis. | `None` |
 | `GROQ_BASE_URL` | Optional | Base URL for the Groq API. | `None` |
 | `DATABASE_URL` | Required for the agent endpoint | PostgreSQL connection string for session, message, approval, and audit storage. | `None` |
+| `AGENT_MAX_HISTORY_MESSAGES` | Optional | Maximum number of stored messages of a session that are replayed into a continuing agent run. A tool call and its output are always replayed together, so the effective history can be shorter. Zero disables the replay. | `20` |
 
 ### Behavior without live AI configuration
 
@@ -304,4 +305,4 @@ application data.
 - `confidence` is a model-estimated score between 0.0 and 1.0, not a calibrated probability of correctness or measured accuracy.
 - Classification quality depends on the model and system prompt and should be evaluated against real tickets before production use.
 - When no `GROQ_API_KEY` is configured, responses come from the deterministic mock service, not a live model.
-- Stored conversation history is not yet replayed into the model, and the memory, approval, and audit tables are not yet written to. The schema exists so that those features can be built on it.
+- Stored conversation history is not yet replayed into the model. The loader that reads a session transcript and turns it into provider input items exists (`app/modules/agent/history.py`), but the agent endpoint does not use it yet. The memory, approval, and audit tables are not written to either; the schema exists so that those features can be built on it.

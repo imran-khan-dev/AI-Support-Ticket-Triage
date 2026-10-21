@@ -202,18 +202,39 @@ def append_messages(
     return stored
 
 
-def list_messages(db: Database, session_id: str) -> list[Message]:
-    """Return the stored messages of a session in sequence order."""
+def list_messages(
+    db: Database,
+    session_id: str,
+    limit: int | None = None,
+) -> list[Message]:
+    """Return the stored messages of a session in sequence order.
+
+    Only messages of the given session are returned: the session id is part
+    of the query, so a session never sees the messages of another one.
+
+    When ``limit`` is given, only the most recent messages are returned. The
+    limit is applied by the database, and the result is still ordered by
+    sequence number, oldest first.
+    """
     canonical = _canonical_session_id(session_id)
     if canonical is None:
         return []
     with db.connection() as conn:
-        rows = conn.execute(
-            "SELECT id, session_id, seq, role, content, call_id, tool_name,"
-            " correlation_id, created_at"
-            " FROM messages WHERE session_id = %s ORDER BY seq",
-            (canonical,),
-        ).fetchall()
+        if limit is None:
+            rows = conn.execute(
+                "SELECT id, session_id, seq, role, content, call_id, tool_name,"
+                " correlation_id, created_at"
+                " FROM messages WHERE session_id = %s ORDER BY seq",
+                (canonical,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT id, session_id, seq, role, content, call_id, tool_name,"
+                " correlation_id, created_at"
+                " FROM messages WHERE session_id = %s ORDER BY seq DESC LIMIT %s",
+                (canonical, limit),
+            ).fetchall()
+            rows = list(reversed(rows))
     return [message_from_row(row) for row in rows]
 
 

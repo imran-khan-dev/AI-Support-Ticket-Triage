@@ -162,8 +162,13 @@ def persist_agent_run(
     session_id: str,
     message: str,
     result: AgentResult,
+    correlation_id: str | None = None,
 ) -> bool:
     """Store the transcript of an agent run.
+
+    ``correlation_id`` identifies the run. The caller can pass the id of the
+    run it is about to start, so that the same id can be used to keep the
+    messages of that run out of the history of a later one.
 
     Returns ``True`` when the transcript was written and ``False`` when it
     could not be. A storage failure is logged rather than raised: the agent's
@@ -176,7 +181,7 @@ def persist_agent_run(
             db,
             session_id,
             build_transcript(message, result),
-            correlation_id=str(uuid.uuid4()),
+            correlation_id=correlation_id or str(uuid.uuid4()),
         )
     except Exception:
         # Deliberately broad: losing the transcript must never discard the

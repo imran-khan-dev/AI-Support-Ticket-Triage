@@ -172,6 +172,7 @@ def run_agent(
     settings: Settings,
     client: OpenAI | None = None,
     max_iterations: int = MAX_ITERATIONS,
+    history: list[dict[str, Any]] | None = None,
 ) -> AgentResult:
     """Run the support agent loop.
 
@@ -181,6 +182,9 @@ def run_agent(
         client: Optional OpenAI client configured for Groq. When ``None``
             (mock mode, no API key), returns a deterministic mock result.
         max_iterations: Maximum number of model-tool rounds before stopping.
+        history: Optional input items of the earlier conversation, oldest
+            first, as produced by the session store. They are placed in front
+            of the current message, which is added exactly once.
 
     Returns:
         AgentResult with status, answer, tool_calls, and optional error.
@@ -200,15 +204,20 @@ def run_agent(
     system_prompt = _get_system_prompt()
 
     # Build the initial input. Groq does not support previous_response_id, so
-    # the full conversation history is passed on every request.
-    input_items: list[dict[str, Any]] = [
+    # the full conversation history is passed on every request. The history
+    # of the session, when there is one, is placed in front of the current
+    # message; the current message itself is added exactly once, here.
+    input_items: list[dict[str, Any]] = []
+    if history:
+        input_items.extend(history)
+    input_items.append(
         {
-            "id": "input_1",
+            "id": f"input_{len(input_items) + 1}",
             "type": "message",
             "role": "user",
             "content": [{"type": "input_text", "text": message}],
         }
-    ]
+    )
 
     tool_calls_record: list[dict[str, Any]] = []
 
