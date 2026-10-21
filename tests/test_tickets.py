@@ -3,7 +3,7 @@ import pytest
 from unittest.mock import patch
 from pydantic import ValidationError
 from fastapi.testclient import TestClient
-from app.schemas import TicketRequest, AnalysisResponse
+from app.modules.analyze.schema import TicketRequest, AnalysisResponse
 from app.core.config import Settings
 from main import app
 
@@ -170,7 +170,7 @@ def test_health_endpoint():
 
 def test_analysis_endpoint_valid_request():
     """Test the analysis endpoint with a valid request (mock mode, no API key)."""
-    with patch('main.groq_client', None):
+    with patch('app.modules.analyze.route.groq_client', None):
         response = client.post(
             "/api/v1/tickets/analyze",
             json={"message": "Hello, I need help."},

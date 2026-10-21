@@ -14,8 +14,9 @@ app.include_router(router, prefix="/api/v1/tickets")
 
 
 @app.get("/health")
-def health_check():
-    return {"status": "ok"}
+async def health_check():
+    """Health check endpoint."""
+    return {"status": "healthy"}
 
 _frontend_dir = os.path.normpath(
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "frontend")

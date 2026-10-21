@@ -56,7 +56,7 @@ def _settings():
 
 def test_agent_returns_final_answer_without_tool():
     settings = _settings()
-    with patch('app.services.agent.OpenAI') as MockOpenAI:
+    with patch('app.agent_core.agent.OpenAI') as MockOpenAI:
         mock_client = Mock()
         mock_response = _make_response(
             output_items=[_make_text_message("Your password can be reset in account settings.")],
@@ -80,7 +80,7 @@ def test_agent_returns_final_answer_without_tool():
 
 def test_agent_executes_one_tool_then_answers():
     settings = _settings()
-    with patch('app.services.agent.OpenAI') as MockOpenAI:
+    with patch('app.agent_core.agent.OpenAI') as MockOpenAI:
         mock_client = Mock()
         # First response: requests search_support_docs tool
         first_response = _make_response(
@@ -134,7 +134,7 @@ def test_agent_executes_one_tool_then_answers():
 
 def test_agent_executes_multiple_tools_in_successive_rounds():
     settings = _settings()
-    with patch('app.services.agent.OpenAI') as MockOpenAI:
+    with patch('app.agent_core.agent.OpenAI') as MockOpenAI:
         mock_client = Mock()
         # Round 1: search_support_docs
         round1 = _make_response(
@@ -182,7 +182,7 @@ def test_agent_executes_multiple_tools_in_successive_rounds():
 
 def test_agent_passes_tool_results_back_to_model():
     settings = _settings()
-    with patch('app.services.agent.OpenAI') as MockOpenAI:
+    with patch('app.agent_core.agent.OpenAI') as MockOpenAI:
         mock_client = Mock()
         first_response = _make_response(
             output_items=[
@@ -220,7 +220,10 @@ def test_agent_passes_tool_results_back_to_model():
             if item.get("type") == "function_call_output"
         )
         assert tool_result_item["call_id"] == "call_1"
-        assert tool_result_item["output"]["tool"] == "lookup_ticket_history"
+        # The Responses API requires `output` to be a JSON string, not a dict.
+        assert isinstance(tool_result_item["output"], str)
+        tool_output = json.loads(tool_result_item["output"])
+        assert tool_output["tool"] == "lookup_ticket_history"
 
 
 # ---------------------------------------------------------------------------
@@ -230,7 +233,7 @@ def test_agent_passes_tool_results_back_to_model():
 
 def test_agent_handles_multiple_tool_calls_in_one_response():
     settings = _settings()
-    with patch('app.services.agent.OpenAI') as MockOpenAI:
+    with patch('app.agent_core.agent.OpenAI') as MockOpenAI:
         mock_client = Mock()
         # One response with two tool calls
         first_response = _make_response(
@@ -271,7 +274,7 @@ def test_agent_handles_multiple_tool_calls_in_one_response():
 
 def test_agent_unknown_tool_cannot_execute():
     settings = _settings()
-    with patch('app.services.agent.OpenAI') as MockOpenAI:
+    with patch('app.agent_core.agent.OpenAI') as MockOpenAI:
         mock_client = Mock()
         # Model requests a tool that is not registered
         first_response = _make_response(
@@ -308,7 +311,7 @@ def test_agent_unknown_tool_cannot_execute():
 
 def test_agent_malformed_arguments_handled_safely():
     settings = _settings()
-    with patch('app.services.agent.OpenAI') as MockOpenAI:
+    with patch('app.agent_core.agent.OpenAI') as MockOpenAI:
         mock_client = Mock()
         # Model sends invalid JSON as arguments
         first_response = _make_response(
@@ -344,7 +347,7 @@ def test_agent_malformed_arguments_handled_safely():
 
 def test_agent_validation_failure_does_not_crash():
     settings = _settings()
-    with patch('app.services.agent.OpenAI') as MockOpenAI:
+    with patch('app.agent_core.agent.OpenAI') as MockOpenAI:
         mock_client = Mock()
         # Model sends empty query (fails Pydantic validation)
         first_response = _make_response(
@@ -377,7 +380,7 @@ def test_agent_validation_failure_does_not_crash():
 
 def test_agent_max_iteration_limit_stops_loop():
     settings = _settings()
-    with patch('app.services.agent.OpenAI') as MockOpenAI:
+    with patch('app.agent_core.agent.OpenAI') as MockOpenAI:
         mock_client = Mock()
         # Every response requests another tool call, never a final answer.
         tool_call_response = _make_response(
@@ -409,7 +412,7 @@ def test_agent_max_iteration_limit_stops_loop():
 
 def test_agent_provider_exception_produces_safe_error():
     settings = _settings()
-    with patch('app.services.agent.OpenAI') as MockOpenAI:
+    with patch('app.agent_core.agent.OpenAI') as MockOpenAI:
         mock_client = Mock()
         mock_client.responses.create.side_effect = Exception(
             "Connection reset by peer with api_key=supersecret"
@@ -452,7 +455,8 @@ def test_agent_mock_mode_without_api_key():
 
 def test_agent_does_not_affect_existing_analyze_service():
     """Sanity check: existing analysis service still works independently."""
-    from app.agent_core.analysis import get_groq_client, mock_analysis
+    from app.agent_core.analysis import mock_analysis
+    from app.ai.provider import get_groq_client
 
     settings = Settings(_env_file=None)
     client = get_groq_client(settings)
