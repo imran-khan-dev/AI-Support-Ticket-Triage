@@ -1,13 +1,24 @@
 from fastapi import FastAPI
 from app.router import router
+from app.persistence import close_pools
 import os
+from contextlib import asynccontextmanager
 from fastapi.staticfiles import StaticFiles
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Release the PostgreSQL connection pool when the application stops."""
+    yield
+    close_pools()
+
 
 app = FastAPI(
     title="AI Support Ticket Analysis",
     version="0.1.0",
     description="A service to analyze support tickets using AI. "
                 "Groq API key is optional and can be set via GROQ_API_KEY environment variable.",
+    lifespan=lifespan,
 )
 
 app.include_router(router, prefix="/api/v1/tickets")

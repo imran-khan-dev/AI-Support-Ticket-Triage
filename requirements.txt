@@ -4,3 +4,5 @@ pydantic-settings
 pytest
 httpx
 openai
+psycopg[binary]
+psycopg-pool
