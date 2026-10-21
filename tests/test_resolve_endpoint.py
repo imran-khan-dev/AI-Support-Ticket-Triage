@@ -7,6 +7,10 @@ from app.modules.agent.schema import TicketResolveResponse
 
 client = TestClient(app)
 
+# The agent endpoint stores every run in the session store, so these tests
+# need the PostgreSQL test database.
+pytestmark = pytest.mark.usefixtures("clean_database")
+
 
 def _make_agent_result(status, answer=None, tool_calls=None, error=None):
     from app.agent_core.agent import AgentResult

@@ -76,6 +76,13 @@ class TicketResolveRequest(BaseModel):
         examples=["I cannot log into my account."],
     )
 
+    session_id: str | None = Field(
+        default=None,
+        description="Optional identifier of an existing session to continue. "
+        "When omitted, the server creates a new session. A supplied id must "
+        "identify an existing, open session; it is never trusted as-is.",
+    )
+
     @field_validator('message', mode='before')
     @classmethod
     def strip_message(cls, value: str) -> str:
@@ -106,4 +113,9 @@ class TicketResolveResponse(BaseModel):
     error: str | None = Field(
         default=None,
         description="A safe, user-facing error message, when applicable.",
+    )
+    session_id: str | None = Field(
+        default=None,
+        description="Identifier of the session the run belongs to. The session "
+        "holds the stored transcript of the run.",
     )

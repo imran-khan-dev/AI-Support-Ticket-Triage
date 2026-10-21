@@ -19,3 +19,13 @@ class Settings(BaseSettings):
         default=None,
         description="Base URL for the Groq API (optional).",
     )
+
+    database_url: str | None = Field(
+        default=None,
+        description="PostgreSQL connection string used for session, message, "
+        "approval, and audit storage, for example "
+        "postgresql://user:password@localhost:5432/ticket_triage. Read from "
+        "the DATABASE_URL environment variable. When it is not configured the "
+        "application still starts, and the endpoints that need storage answer "
+        "with a service-unavailable response.",
+    )
