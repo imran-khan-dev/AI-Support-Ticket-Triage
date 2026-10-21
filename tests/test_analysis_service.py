@@ -5,12 +5,14 @@ from pydantic import ValidationError
 
 from openai import Timeout
 
-from app.schemas import TicketRequest, AnalysisResponse
+from app.modules.analyze.schema import TicketRequest, AnalysisResponse
 from app.core.config import Settings
 from app.agent_core.analysis import (
-    get_groq_client,
     mock_analysis,
     analyze_ticket,
+)
+from app.ai.provider import (
+    get_groq_client,
     get_system_prompt,
 )
 
@@ -28,7 +30,7 @@ def test_analyze_uses_mock_when_no_api_key():
 
 def test_analyze_handles_missing_confidence_from_groq():
     """Test that analyze raises ValidationError when Groq omits confidence."""
-    with patch('app.services.analysis.OpenAI') as MockOpenAI:
+    with patch('app.ai.provider.OpenAI') as MockOpenAI:
         mock_client = Mock()
         mock_response = Mock()
         mock_response.output_text = '{"category": "billing", "priority": "high", "sentiment": "frustrated", "summary": "Test summary", "requires_human_review": true}'
@@ -44,7 +46,7 @@ def test_analyze_handles_missing_confidence_from_groq():
 
 def test_analyze_calls_groq_when_api_key_set():
     """Test that analyze calls Groq Responses API when API key is set."""
-    with patch('app.services.analysis.OpenAI') as MockOpenAI:
+    with patch('app.ai.provider.OpenAI') as MockOpenAI:
         mock_client = Mock()
         mock_response = Mock()
         mock_response.output_text = '{"category": "billing", "priority": "high", "sentiment": "frustrated", "summary": "Test summary", "requires_human_review": true, "confidence": 0.88}'
@@ -76,7 +78,7 @@ def test_analyze_calls_groq_when_api_key_set():
 
 def test_analyze_uses_custom_base_url():
     """Test that get_groq_client uses the configured base URL."""
-    with patch('app.services.analysis.OpenAI') as MockOpenAI:
+    with patch('app.ai.provider.OpenAI') as MockOpenAI:
         mock_client = Mock()
         MockOpenAI.return_value = mock_client
 
@@ -92,7 +94,7 @@ def test_analyze_uses_custom_base_url():
 
 def test_get_groq_client_sets_max_retries():
     """get_groq_client configures max_retries=2 for SDK retry behavior."""
-    with patch('app.services.analysis.OpenAI') as MockOpenAI:
+    with patch('app.ai.provider.OpenAI') as MockOpenAI:
         mock_client = Mock()
         MockOpenAI.return_value = mock_client
 
@@ -106,7 +108,7 @@ def test_get_groq_client_sets_max_retries():
 
 def test_get_groq_client_sets_timeout():
     """get_groq_client configures a bounded 60s request timeout with 5s connect timeout."""
-    with patch('app.services.analysis.OpenAI') as MockOpenAI:
+    with patch('app.ai.provider.OpenAI') as MockOpenAI:
         mock_client = Mock()
         MockOpenAI.return_value = mock_client
 
@@ -121,7 +123,7 @@ def test_get_groq_client_sets_timeout():
 
 def test_analyze_handles_invalid_json_from_groq():
     """Test that analyze raises when Groq returns invalid JSON."""
-    with patch('app.services.analysis.OpenAI') as MockOpenAI:
+    with patch('app.ai.provider.OpenAI') as MockOpenAI:
         mock_client = Mock()
         mock_response = Mock()
         mock_response.output_text = 'invalid json'
@@ -137,7 +139,7 @@ def test_analyze_handles_invalid_json_from_groq():
 
 def test_analyze_handles_missing_fields_from_groq():
     """Test that analyze raises ValidationError when Groq returns missing fields."""
-    with patch('app.services.analysis.OpenAI') as MockOpenAI:
+    with patch('app.ai.provider.OpenAI') as MockOpenAI:
         mock_client = Mock()
         mock_response = Mock()
         mock_response.output_text = '{"category": "billing", "priority": "high"}'  # missing sentiment, summary, requires_human_review
@@ -153,7 +155,7 @@ def test_analyze_handles_missing_fields_from_groq():
 
 def test_analyze_propagates_groq_errors():
     """Test that analyze propagates errors from the Groq client."""
-    with patch('app.services.analysis.OpenAI') as MockOpenAI:
+    with patch('app.ai.provider.OpenAI') as MockOpenAI:
         mock_client = Mock()
         mock_client.responses.create.side_effect = Exception("Groq error")
         MockOpenAI.return_value = mock_client
@@ -214,7 +216,7 @@ def test_get_system_prompt_defines_human_review_rules():
 
 def test_analyze_passes_refined_prompt_as_instructions():
     """The service passes get_system_prompt() as the Responses API instructions argument."""
-    with patch('app.services.analysis.OpenAI') as MockOpenAI:
+    with patch('app.ai.provider.OpenAI') as MockOpenAI:
         mock_client = Mock()
         mock_response = Mock()
         mock_response.output_text = '{"category": "other", "priority": "low", "sentiment": "positive", "summary": "Thanks for the help.", "requires_human_review": false, "confidence": 0.9}'

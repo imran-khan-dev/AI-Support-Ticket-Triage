@@ -92,7 +92,7 @@ def _strip_titles(schema_obj: Any) -> Any:
         return [_strip_titles(item) for item in schema_obj]
     return schema_obj
 
-
+# Prepare the tools for Groq
 def _build_tool_definitions() -> list[dict[str, Any]]:
     """Build OpenAI function tool definitions from the registered tools.
 

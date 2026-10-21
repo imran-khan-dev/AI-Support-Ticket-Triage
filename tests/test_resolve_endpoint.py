@@ -3,7 +3,7 @@ from fastapi.testclient import TestClient
 from unittest.mock import patch
 
 from main import app
-from app.schemas import TicketResolveResponse
+from app.modules.agent.schema import TicketResolveResponse
 
 client = TestClient(app)
 
@@ -25,7 +25,7 @@ def _make_agent_result(status, answer=None, tool_calls=None, error=None):
 
 def test_resolve_endpoint_successful_agent_result():
     """A successful agent run returns 200 with the answer and tool calls."""
-    with patch('main.run_agent') as mock_run_agent:
+    with patch('app.modules.agent.route.run_agent') as mock_run_agent:
         mock_run_agent.return_value = _make_agent_result(
             status="success",
             answer="To reset your password, visit account settings.",
@@ -39,7 +39,7 @@ def test_resolve_endpoint_successful_agent_result():
             ],
         )
         response = client.post(
-            "/api/v1/tickets/resolve",
+            "/api/v1/tickets/agent/run",
             json={"message": "How do I reset my password?"},
         )
         assert response.status_code == 200
@@ -53,13 +53,13 @@ def test_resolve_endpoint_successful_agent_result():
 
 def test_resolve_endpoint_validates_response_schema():
     """The response conforms to TicketResolveResponse."""
-    with patch('main.run_agent') as mock_run_agent:
+    with patch('app.modules.agent.route.run_agent') as mock_run_agent:
         mock_run_agent.return_value = _make_agent_result(
             status="success",
             answer="Final answer.",
         )
         response = client.post(
-            "/api/v1/tickets/resolve",
+            "/api/v1/tickets/agent/run",
             json={"message": "Hello."},
         )
         assert response.status_code == 200
@@ -73,9 +73,9 @@ def test_resolve_endpoint_validates_response_schema():
 
 def test_resolve_endpoint_mock_mode():
     """When no API key is configured, the endpoint reports mock_mode=True."""
-    with patch('main.groq_client', None):
+    with patch('app.modules.agent.route.groq_client', None):
         response = client.post(
-            "/api/v1/tickets/resolve",
+            "/api/v1/tickets/agent/run",
             json={"message": "How do I reset my password?"},
         )
         assert response.status_code == 200
@@ -95,7 +95,7 @@ def test_resolve_endpoint_mock_mode():
 def test_resolve_endpoint_empty_message():
     """An empty message returns 422."""
     response = client.post(
-        "/api/v1/tickets/resolve",
+        "/api/v1/tickets/agent/run",
         json={"message": ""},
     )
     assert response.status_code == 422
@@ -104,7 +104,7 @@ def test_resolve_endpoint_empty_message():
 def test_resolve_endpoint_whitespace_message():
     """A whitespace-only message returns 422."""
     response = client.post(
-        "/api/v1/tickets/resolve",
+        "/api/v1/tickets/agent/run",
         json={"message": "   "},
     )
     assert response.status_code == 422
@@ -113,7 +113,7 @@ def test_resolve_endpoint_whitespace_message():
 def test_resolve_endpoint_missing_message():
     """A missing message field returns 422."""
     response = client.post(
-        "/api/v1/tickets/resolve",
+        "/api/v1/tickets/agent/run",
         json={},
     )
     assert response.status_code == 422
@@ -126,13 +126,13 @@ def test_resolve_endpoint_missing_message():
 
 def test_resolve_endpoint_provider_failure_returns_502():
     """A provider failure returns 502 with a safe message."""
-    with patch('main.run_agent') as mock_run_agent:
+    with patch('app.modules.agent.route.run_agent') as mock_run_agent:
         mock_run_agent.return_value = _make_agent_result(
             status="provider_failure",
             error="Provider service is temporarily unavailable.",
         )
         response = client.post(
-            "/api/v1/tickets/resolve",
+            "/api/v1/tickets/agent/run",
             json={"message": "Hello."},
         )
         assert response.status_code == 502
@@ -148,7 +148,7 @@ def test_resolve_endpoint_provider_failure_returns_502():
 
 def test_resolve_endpoint_max_iterations_reached():
     """Hitting the iteration limit returns a structured non-success result."""
-    with patch('main.run_agent') as mock_run_agent:
+    with patch('app.modules.agent.route.run_agent') as mock_run_agent:
         mock_run_agent.return_value = _make_agent_result(
             status="max_iterations_reached",
             answer=None,
@@ -156,7 +156,7 @@ def test_resolve_endpoint_max_iterations_reached():
             error="Agent reached the maximum of 10 iterations without producing a final answer.",
         )
         response = client.post(
-            "/api/v1/tickets/resolve",
+            "/api/v1/tickets/agent/run",
             json={"message": "Keep searching forever."},
         )
         assert response.status_code == 200
@@ -173,7 +173,7 @@ def test_resolve_endpoint_max_iterations_reached():
 
 def test_analyze_endpoint_still_works():
     """The existing /analyze endpoint is unaffected by the new resolve route."""
-    with patch('main.groq_client', None):
+    with patch('app.modules.analyze.route.groq_client', None):
         response = client.post(
             "/api/v1/tickets/analyze",
             json={"message": "Hello, I need help."},

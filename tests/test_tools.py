@@ -214,3 +214,16 @@ def test_tools_are_read_only():
     after_tickets = len(lookup_ticket_history(LookupTicketHistoryArgs(query="billing")))
     assert before_docs == after_docs
     assert before_tickets == after_tickets
+
+
+def test_tools_return_no_results_for_an_unvalidated_blank_query():
+    """A blank query that bypasses schema validation yields no results.
+
+    The schemas reject blank queries, so this only exercises the defensive
+    guard inside the matching helper.
+    """
+    args = SearchSupportDocsArgs.model_construct(query="   ")
+    assert search_support_docs(args) == []
+
+    history_args = LookupTicketHistoryArgs.model_construct(query="   ")
+    assert lookup_ticket_history(history_args) == []
