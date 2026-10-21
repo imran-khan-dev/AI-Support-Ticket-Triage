@@ -1,5 +1,5 @@
 
-from fastapi import APIRouter,  HTTPException
+from fastapi import APIRouter,  HTTPException, Response
 from app.agent_core.agent import run_agent
 from app.persistence import DatabaseConfigurationError, get_database
 
@@ -22,9 +22,26 @@ groq_client = get_groq_client(settings)
 
 router = APIRouter(tags=["agent"])
 
+#: Response header carrying the session id of the run.
+#:
+#: The session id is also part of the successful response body. The header
+#: additionally makes it recoverable when a run ends in an error response,
+#: where the body is kept unchanged.
+SESSION_ID_HEADER = "X-Session-Id"
+
+#: Response header reporting whether the transcript of the run was stored.
+#:
+#: The outcome is reported in a header rather than in the body, because the
+#: body of this endpoint has a fixed field set. The answer is returned either
+#: way, because the answer is the primary result of the request.
+TRANSCRIPT_STORED_HEADER = "X-Transcript-Stored"
+
 
 @router.post("/run", response_model=TicketResolveResponse)
-async def resolve_ticket_endpoint(request: TicketResolveRequest):
+async def resolve_ticket_endpoint(
+    request: TicketResolveRequest,
+    response: Response,
+):
     """Resolves a support ticket using the tool-using agent.
 
     Invokes the agent loop, which may call registered read-only tools
@@ -37,6 +54,11 @@ async def resolve_ticket_endpoint(request: TicketResolveRequest):
     request carries no ``session_id``, and the transcript of the run is stored
     under that session. A supplied ``session_id`` is used only when it
     identifies an existing, open session.
+
+    The session id is returned in the ``X-Session-Id`` header as well as in
+    the response body, so that a client can recover it even when the run ends
+    in an error response. The ``X-Transcript-Stored`` header reports whether
+    the transcript of the run was written.
     """
     try:
         database = get_database(settings.database_url)
@@ -68,9 +90,16 @@ async def resolve_ticket_endpoint(request: TicketResolveRequest):
             detail="Session storage is temporarily unavailable.",
         )
 
+    # The session id is published as a header before the run starts, so that
+    # it survives an error response whose body must stay unchanged.
+    response.headers[SESSION_ID_HEADER] = session_id
+
     result = run_agent(request.message, settings, groq_client)
 
-    persist_agent_run(database, session_id, request.message, result)
+    # A transcript that cannot be stored must not discard the answer, so the
+    # outcome is reported instead of raised.
+    persisted = persist_agent_run(database, session_id, request.message, result)
+    response.headers[TRANSCRIPT_STORED_HEADER] = "true" if persisted else "false"
 
     if result.status == "mock":
         return TicketResolveResponse(
@@ -94,6 +123,10 @@ async def resolve_ticket_endpoint(request: TicketResolveRequest):
         raise HTTPException(
             status_code=502,
             detail="Provider service is temporarily unavailable.",
+            headers={
+                SESSION_ID_HEADER: session_id,
+                TRANSCRIPT_STORED_HEADER: "true" if persisted else "false",
+            },
         )
 
     if result.status == "max_iterations_reached":

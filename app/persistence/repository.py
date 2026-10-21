@@ -17,6 +17,7 @@ from typing import Sequence
 
 from app.persistence.db import Database
 from app.persistence.models import (
+    SESSION_STATUS_CLOSED,
     SESSION_STATUS_OPEN,
     Message,
     MessageDraft,
@@ -99,6 +100,44 @@ def list_sessions(db: Database) -> list[Session]:
             " FROM sessions ORDER BY created_at, id"
         ).fetchall()
     return [session_from_row(row) for row in rows]
+
+
+def set_session_status(
+    db: Database,
+    session_id: str,
+    status: str,
+) -> Session | None:
+    """Set the lifecycle status of a session and return the updated row.
+
+    Returns ``None`` when the session does not exist.
+    """
+    if status not in (SESSION_STATUS_OPEN, SESSION_STATUS_CLOSED):
+        raise ValueError(f"Unsupported session status: {status!r}")
+
+    canonical = _canonical_session_id(session_id)
+    if canonical is None:
+        return None
+
+    now = utc_now()
+    with db.write_transaction() as conn:
+        row = conn.execute(
+            "UPDATE sessions SET status = %s, updated_at = %s WHERE id = %s"
+            " RETURNING id, created_at, updated_at, status, ticket_id, title",
+            (status, now, canonical),
+        ).fetchone()
+    if row is None:
+        return None
+    return session_from_row(row)
+
+
+def close_session(db: Database, session_id: str) -> Session | None:
+    """Close a session so that it no longer accepts new runs."""
+    return set_session_status(db, session_id, SESSION_STATUS_CLOSED)
+
+
+def reopen_session(db: Database, session_id: str) -> Session | None:
+    """Reopen a closed session."""
+    return set_session_status(db, session_id, SESSION_STATUS_OPEN)
 
 
 def append_messages(

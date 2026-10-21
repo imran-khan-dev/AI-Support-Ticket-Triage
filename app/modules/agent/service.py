@@ -162,12 +162,14 @@ def persist_agent_run(
     session_id: str,
     message: str,
     result: AgentResult,
-) -> None:
+) -> bool:
     """Store the transcript of an agent run.
 
-    A storage failure is logged rather than raised: the agent's answer is the
-    primary result of the request and must not be discarded because the
-    transcript could not be written.
+    Returns ``True`` when the transcript was written and ``False`` when it
+    could not be. A storage failure is logged rather than raised: the agent's
+    answer is the primary result of the request and must not be discarded
+    because the transcript could not be written. The caller reports the
+    outcome so the client can tell a stored transcript from a lost one.
     """
     try:
         append_messages(
@@ -182,3 +184,5 @@ def persist_agent_run(
         logger.exception(
             "Failed to persist the transcript for session %s", session_id
         )
+        return False
+    return True

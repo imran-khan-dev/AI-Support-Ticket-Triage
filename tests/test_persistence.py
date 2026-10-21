@@ -226,14 +226,21 @@ def test_get_database_returns_one_instance_per_url(database):
 
 def test_connections_are_reused_from_the_pool(database):
     """The pool reuses backend connections instead of opening one per request."""
+    pool = get_pool(database.url)
+    requests = 20
+
     backend_pids = set()
-    for _ in range(20):
+    for _ in range(requests):
         with database.connection() as conn:
             backend_pids.add(
                 conn.execute("SELECT pg_backend_pid() AS pid").fetchone()["pid"]
             )
 
-    assert len(backend_pids) <= 2
+    # Far fewer connections than requests were used, so the connections are
+    # pooled and reused rather than opened per request. The pool may already
+    # hold connections from earlier tests, so the bound is its own size.
+    assert len(backend_pids) < requests
+    assert len(backend_pids) <= pool.get_stats()["pool_max"]
 
 
 def test_a_closed_handle_refuses_to_be_used(database):

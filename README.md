@@ -104,6 +104,36 @@ The six tables are `sessions`, `messages`, `memories`, `actions`,
 `approvers`, and `audit_events`. `audit_events` is append-only: a trigger
 rejects any `UPDATE` or `DELETE` on it.
 
+#### What the role needs
+
+The user in `DATABASE_URL` owns the schema it migrates, so it needs to be
+able to create tables, indexes, and triggers in that database. The
+administrator role of a local server satisfies this out of the box. The
+`plpgsql` extension, which PostgreSQL installs by default, has to be
+available, because the append-only trigger is written in it.
+
+```powershell
+psql -U postgres -c "CREATE DATABASE ticket_triage;"
+psql -U postgres -c "CREATE DATABASE ticket_triage_test;"
+psql -U postgres -d ticket_triage -c "CREATE EXTENSION IF NOT EXISTS plpgsql;"
+```
+
+The application was verified against PostgreSQL 17.5 on `127.0.0.1:5432`,
+with the schema created by the migration runner from an empty database.
+
+#### What was not verified
+
+The migration runner was exercised against a single local server, on an empty
+database, with one application instance. The following were not verified and
+should be checked before running this against a shared or managed server:
+
+- migrating a database that already holds data from an older version of the
+  schema;
+- running the server on several instances against the same database at the
+  same time, beyond the advisory lock that the runner takes;
+- behaviour when the database is read-only, when the role lacks the
+  permissions above, or when the server is unreachable mid-request;
+
 ## Configuration
 
 The application reads configuration from environment variables, with `.env` loaded automatically by Pydantic Settings from the repository root.
@@ -200,6 +230,51 @@ Example response:
 | `summary` | string (1–200 chars) | Brief summary of the ticket. |
 | `requires_human_review` | boolean | Whether the ticket needs human review. |
 | `confidence` | number (0.0–1.0) | Model-estimated confidence. |
+
+### Resolve a ticket with the agent
+
+```powershell
+$body = @{ message = "I was charged twice." } | ConvertTo-Json
+Invoke-RestMethod -Uri "http://127.0.0.1:8000/api/v1/tickets/agent/run" -Method Post -Body $body -ContentType "application/json"
+```
+
+The agent stores the run in a session. Omit `session_id` to start a new
+session, or pass a `session_id` to continue an existing one.
+
+Example response:
+
+```json
+{
+  "status": "success",
+  "answer": "Refunds are issued within 5 business days.",
+  "mock_mode": false,
+  "tool_calls": [],
+  "error": null,
+  "session_id": "6d5996cb-43f7-422c-a50f-b8ad57044617"
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `status` | string | `success`, `mock`, or `max_iterations_reached`. |
+| `answer` | string | The agent's answer, when there is one. |
+| `mock_mode` | boolean | True when no Groq API key is configured. |
+| `tool_calls` | array | One record per tool call the agent made. |
+| `error` | string | A safe error message, when applicable. |
+| `session_id` | string | The session the run belongs to. |
+
+Two response headers carry the details that do not belong in the body:
+
+| Header | Description |
+|---|---|
+| `X-Session-Id` | The session the run belongs to. |
+| `X-Transcript-Stored` | `true` when the transcript of the run was written, `false` when it was lost. |
+
+The session id matters when the run ends in an error: a provider failure
+answers HTTP 502 with an unchanged error body, and the header still carries
+the session id, so the client can recover it and continue the conversation
+later. The answer is returned even when the transcript could not be stored,
+because the answer is the primary result of the request.
 
 ## Running tests
 

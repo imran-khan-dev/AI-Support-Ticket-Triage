@@ -33,11 +33,14 @@ from app.persistence.models import (
 from app.persistence.repository import (
     UnknownSessionError,
     append_messages,
+    close_session,
     count_messages,
     create_session,
     get_session,
     list_messages,
     list_sessions,
+    reopen_session,
+    set_session_status,
     utc_now,
 )
 
@@ -60,6 +63,7 @@ __all__ = [
     "apply_migrations",
     "build_pool",
     "close_pools",
+    "close_session",
     "count_messages",
     "create_session",
     "current_version",
@@ -68,6 +72,8 @@ __all__ = [
     "get_session",
     "list_messages",
     "list_sessions",
+    "reopen_session",
     "resolve_database_url",
+    "set_session_status",
     "utc_now",
 ]
