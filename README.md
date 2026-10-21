@@ -22,16 +22,22 @@ A FastAPI backend that analyzes customer support tickets into category, priority
 ├── .env                   # Local environment variables (ignored by git, do not commit)
 ├── app/
 │   ├── __init__.py
-│   ├── config.py          # Pydantic Settings (GROQ_API_KEY, GROQ_MODEL, GROQ_BASE_URL)
-│   ├── schemas.py         # Pydantic request/response models
-│   └── services/
-│       ├── __init__.py
-│       └── analysis.py      # Analysis logic: client, mock fallback, prompt, Responses API call
+│   ├── core/
+│   │   └── config.py      # Pydantic Settings (GROQ_API_KEY, GROQ_MODEL, GROQ_BASE_URL, DATABASE_URL)
+│   ├── ai/
+│   │   └── provider.py    # Groq client construction
+│   ├── agent_core/        # Agent loop, tool registry, argument schemas
+│   ├── modules/
+│   │   ├── analyze/       # POST /api/v1/tickets/analyze
+│   │   └── agent/         # POST /api/v1/tickets/agent/run
+│   └── persistence/       # PostgreSQL access: pool, migrations, models, repository
 └── tests/
-    ├── __init__.py
+    ├── conftest.py        # Points the suite at the PostgreSQL test database
     ├── test_analysis_service.py
     ├── test_tickets.py
-    └── test_api_error_handling.py
+    ├── test_api_error_handling.py
+    ├── test_persistence.py
+    └── test_agent_sessions.py
 ```
 
 ## Request lifecycle
@@ -61,7 +67,42 @@ venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-Dependencies: `fastapi`, `uvicorn`, `pydantic-settings`, `pytest`, `httpx`, `openai`.
+Dependencies: `fastapi`, `uvicorn`, `pydantic-settings`, `pytest`, `httpx`, `openai`, `psycopg[binary]`, `psycopg-pool`.
+
+### PostgreSQL setup
+
+The application stores sessions, transcripts, memories, approval actions,
+approvers, and audit events in PostgreSQL. The schema is created by a
+versioned migration runner, so the database only has to exist.
+
+1. Make sure a PostgreSQL server is running and reachable.
+
+2. Create the application database and a separate database for the tests:
+
+```powershell
+createdb ticket_triage
+createdb ticket_triage_test
+```
+
+3. Point the application at it through `DATABASE_URL` (see
+   [Configuration](#configuration)):
+
+```
+DATABASE_URL=postgresql://postgres:your_password@localhost:5432/ticket_triage
+```
+
+4. Start the server. The schema is applied automatically the first time a
+   request needs storage, and applying it again is a no-op.
+
+The migration runner takes a PostgreSQL advisory lock, so several instances
+may start at the same time without migrating the database concurrently. Each
+migration runs inside its own transaction: because PostgreSQL has
+transactional DDL, a failed migration leaves neither the schema nor the
+recorded version changed.
+
+The six tables are `sessions`, `messages`, `memories`, `actions`,
+`approvers`, and `audit_events`. `audit_events` is append-only: a trigger
+rejects any `UPDATE` or `DELETE` on it.
 
 ## Configuration
 
@@ -79,6 +120,7 @@ copy .env.example .env
 GROQ_API_KEY=your_groq_api_key_here
 GROQ_MODEL=openai/gpt-oss-20b
 GROQ_BASE_URL=https://api.groq.com/openai/v1
+DATABASE_URL=postgresql://postgres:your_password@localhost:5432/ticket_triage
 ```
 
 | Variable | Required? | Description | Default |
@@ -86,12 +128,21 @@ GROQ_BASE_URL=https://api.groq.com/openai/v1
 | `GROQ_API_KEY` | Optional | Groq API key for AI-powered analysis (optional). | `None` (mock mode) |
 | `GROQ_MODEL` | Required when `GROQ_API_KEY` is set | Groq model to use for analysis. | `None` |
 | `GROQ_BASE_URL` | Optional | Base URL for the Groq API. | `None` |
+| `DATABASE_URL` | Required for the agent endpoint | PostgreSQL connection string for session, message, approval, and audit storage. | `None` |
 
 ### Behavior without live AI configuration
 
 If `GROQ_API_KEY` is not set, the Groq client is `None` and the endpoint uses the deterministic mock analysis response described above. This lets you develop and test without a Groq account.
 
 If `GROQ_API_KEY` is set but `GROQ_MODEL` is not, the application raises a clear configuration error at startup rather than failing mid-request.
+
+### Behavior without a database
+
+The application starts even when `DATABASE_URL` is not configured, and
+`GET /health` keeps answering. The endpoints that need storage - currently
+`POST /api/v1/tickets/agent/run` - answer HTTP 503 instead of failing with an
+unhandled error. `POST /api/v1/tickets/analyze` does not use the database and
+is unaffected.
 
 ## Running the server
 
@@ -158,11 +209,24 @@ From the repository root, with the virtual environment activated:
 python -m pytest -v
 ```
 
-Tests are mocked and do not require a real Groq API key or make paid API requests. The suite currently has 52 passing tests covering schema validation, mock analysis, mocked Groq analysis, environment-driven configuration, missing model configuration, custom base URL, invalid provider output, provider error handling, confidence validation, health endpoint behavior, and independence from the developer's real `.env` file.
+Tests are mocked and do not require a real Groq API key or make paid API requests.
+
+The persistence tests need a running PostgreSQL server and the
+`ticket_triage_test` database. The connection string is resolved in this
+order, so no credential has to be stored in the repository:
+
+1. `TEST_DATABASE_URL`, when it is set;
+2. otherwise `DATABASE_URL` from the environment or from the local `.env`
+   file, with the database name replaced by `ticket_triage_test`;
+3. otherwise `postgresql://postgres@127.0.0.1:5432/ticket_triage_test`, which
+   works with trust authentication or a `pgpass` file.
+
+The suite empties the test database before each test, so it never touches
+application data.
 
 ## Limitations
 
 - `confidence` is a model-estimated score between 0.0 and 1.0, not a calibrated probability of correctness or measured accuracy.
 - Classification quality depends on the model and system prompt and should be evaluated against real tickets before production use.
 - When no `GROQ_API_KEY` is configured, responses come from the deterministic mock service, not a live model.
-- There is no database persistence, authentication, or authorization in this milestone.
+- Stored conversation history is not yet replayed into the model, and the memory, approval, and audit tables are not yet written to. The schema exists so that those features can be built on it.
