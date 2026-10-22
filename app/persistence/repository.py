@@ -738,6 +738,51 @@ def _mark_action_executed_row(
     return action_from_row(current), False
 
 
+def claim_action_for_execution(
+    db: Database,
+    action_id: str,
+    *,
+    executed_by: str,
+) -> Action | None:
+    """Claim an approved action for execution.
+
+    The claim is taken only when the action is still approved and has not
+    been claimed yet. A second caller therefore cannot start the same
+    execution. The claim is released on failure by the caller.
+    """
+    canonical = _canonical_uuid(action_id)
+    if canonical is None:
+        return None
+
+    now = utc_now()
+    with db.write_transaction() as conn:
+        row = conn.execute(
+            "UPDATE actions SET executed_by = %s, executed_at = %s"
+            " WHERE id = %s AND state = %s AND executed_by IS NULL"
+            " RETURNING id, request_key, session_id, correlation_id, tool_name,"
+            " effect_class, args, args_hash, state, requested_by, requested_at,"
+            " decided_by, decided_at, decision_reason, execution_status,"
+            " execution_error, executed_by, executed_at",
+            (executed_by, now, canonical, ACTION_STATE_APPROVED),
+        ).fetchone()
+    if row is None:
+        return None
+    return action_from_row(row)
+
+
+def release_action_execution_claim(db: Database, action_id: str) -> None:
+    """Release a claim taken on an approved action."""
+    canonical = _canonical_uuid(action_id)
+    if canonical is None:
+        return
+    with db.write_transaction() as conn:
+        conn.execute(
+            "UPDATE actions SET executed_by = NULL, executed_at = NULL"
+            " WHERE id = %s AND state = %s",
+            (canonical, ACTION_STATE_APPROVED),
+        )
+
+
 def mark_action_executed(
     db: Database,
     action_id: str,
