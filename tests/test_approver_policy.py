@@ -99,7 +99,7 @@ def test_an_unknown_capability_is_denied():
     """A capability that is not in the policy is refused, even for an admin."""
     approver = _approver(APPROVER_ROLE_ADMIN)
 
-    assert is_authorized(approver, "action.execute") is False
+    assert is_authorized(approver, "action.foo") is False
     assert is_authorized(approver, "") is False
 
 

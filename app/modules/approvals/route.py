@@ -2,7 +2,12 @@ from fastapi import APIRouter, Depends, HTTPException, Header
 from app.core.config import Settings
 from app.persistence import get_database, DatabaseConfigurationError
 from app.modules.approvals.service import authenticate_approver
-from app.modules.approvals.policy import is_authorized, CAPABILITY_LIST_ACTIONS, CAPABILITY_DECIDE_ACTION
+from app.modules.approvals.policy import (
+    is_authorized,
+    CAPABILITY_LIST_ACTIONS,
+    CAPABILITY_DECIDE_ACTION,
+    CAPABILITY_EXECUTE_ACTION,
+)
 from app.modules.approvals.decision_service import (
     decide_approval,
     ApprovalDecisionError,
@@ -78,8 +83,12 @@ def decide_action_endpoint(
 @router.post("/actions/{action_id}/execute", response_model=ExecutionResponse)
 def execute_action_endpoint(
     action_id: str,
+    x_approver_token: str | None = Header(default=None),
     database=Depends(_database),
 ):
+    approver = _approver(database, x_approver_token)
+    if not is_authorized(approver, CAPABILITY_EXECUTE_ACTION):
+        raise HTTPException(status_code=403, detail="Not authorized.")
     try:
         result = execute_approved_action(database, action_id=action_id)
     except ActionExecutionUncertainError as exc:
