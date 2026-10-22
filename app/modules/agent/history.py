@@ -15,6 +15,8 @@ The loader guarantees:
   together, and a group is never cut in half by the size limit. An output
   without its call, and a call without its output, are left out, because the
   provider cannot match half a pair.
+* **Distinct call ids.** A replayed call gets a call id of its own, so it can
+  never be confused with a call the model makes in the current turn.
 * **No duplication of the current message.** The loader only returns what was
   stored earlier. The message of the current run is added once, by the agent
   loop, after the history.
@@ -42,7 +44,7 @@ from app.persistence.repository import list_messages
 def _user_item(message: Message) -> dict[str, Any]:
     """Return the input item of a stored user message."""
     return {
-        "id": f"msg_{message.id}",
+        "id": f"hist_msg_{message.id}",
         "type": "message",
         "role": ROLE_USER,
         "content": [{"type": "input_text", "text": message.content}],
@@ -52,7 +54,7 @@ def _user_item(message: Message) -> dict[str, Any]:
 def _assistant_item(message: Message) -> dict[str, Any]:
     """Return the input item of a stored assistant answer."""
     return {
-        "id": f"msg_{message.id}",
+        "id": f"hist_msg_{message.id}",
         "type": "message",
         "role": ROLE_ASSISTANT,
         "content": [{"type": "output_text", "text": message.content}],
@@ -79,7 +81,11 @@ def _tool_name_of(message: Message) -> str | None:
     return None
 
 
-def _function_call_item(message: Message, name: str) -> dict[str, Any]:
+def _function_call_item(
+    message: Message,
+    name: str,
+    call_id: str,
+) -> dict[str, Any]:
     """Return the input item of a stored assistant tool call.
 
     The Responses API carries the arguments of a call as a JSON string, so
@@ -93,9 +99,9 @@ def _function_call_item(message: Message, name: str) -> dict[str, Any]:
     if isinstance(payload, dict):
         arguments = payload.get("arguments") or {}
     return {
-        "id": f"fc_{message.id}",
+        "id": f"hist_fc_{message.id}",
         "type": "function_call",
-        "call_id": message.call_id,
+        "call_id": call_id,
         "name": name,
         "arguments": json.dumps(arguments, sort_keys=True, default=str),
     }
@@ -104,13 +110,14 @@ def _function_call_item(message: Message, name: str) -> dict[str, Any]:
 def _function_call_output_item(
     message: Message,
     name: str,
+    call_id: str,
 ) -> dict[str, Any]:
     """Return the input item of a stored tool result."""
     return {
-        "id": f"output_{message.id}",
+        "id": f"hist_output_{message.id}",
         "type": "function_call_output",
         "status": "completed",
-        "call_id": message.call_id,
+        "call_id": call_id,
         "name": name,
         "output": message.content,
     }
@@ -156,10 +163,16 @@ def _group_items(group: Sequence[Message]) -> list[dict[str, Any]]:
         name = _tool_name_of(call)
         if name is None:
             return []
-        items = [_function_call_item(call, name)]
+        # The call id of a replayed group is derived from the stored row, so
+        # it can never be equal to the call id of a call the model makes in
+        # the current turn. The output keeps the id of its call.
+        call_id = f"hist_call_{call.id}"
+        items = [_function_call_item(call, name, call_id)]
         for message in group[1:]:
             items.append(
-                _function_call_output_item(message, message.tool_name or name)
+                _function_call_output_item(
+                    message, message.tool_name or name, call_id
+                )
             )
         return items
 

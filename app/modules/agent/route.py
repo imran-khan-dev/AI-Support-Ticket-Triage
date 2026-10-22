@@ -1,4 +1,6 @@
 
+import uuid
+
 from fastapi import APIRouter,  HTTPException, Response
 from app.agent_core.agent import run_agent
 from app.persistence import DatabaseConfigurationError, get_database
@@ -11,6 +13,7 @@ from app.modules.agent.service import (
     SessionClosedError,
     SessionNotFoundError,
     StorageError,
+    load_session_history,
     persist_agent_run,
     prepare_session_store,
     resolve_session_id,
@@ -55,15 +58,31 @@ async def resolve_ticket_endpoint(
     under that session. A supplied ``session_id`` is used only when it
     identifies an existing, open session.
 
+    A continuing run also receives the earlier turns of its session. The
+    history is bounded by ``AGENT_MAX_HISTORY_MESSAGES``, and a tool call is
+    never separated from its output. The message of the current run is not
+    part of the history and is sent exactly once.
+
     The session id is returned in the ``X-Session-Id`` header as well as in
     the response body, so that a client can recover it even when the run ends
     in an error response. The ``X-Transcript-Stored`` header reports whether
     the transcript of the run was written.
     """
+    # One identifier per run: it ties the transcript of this run to the
+    # history of the session, so the messages of this run are never replayed
+    # into it.
+    run_id = str(uuid.uuid4())
+
     try:
         database = get_database(settings.database_url)
         prepare_session_store(database)
         session_id = resolve_session_id(database, request.session_id)
+        history = load_session_history(
+            database,
+            session_id,
+            max_messages=settings.agent_max_history_messages,
+            exclude_correlation_ids={run_id},
+        )
     except InvalidSessionIdError:
         raise HTTPException(
             status_code=422,
@@ -94,11 +113,17 @@ async def resolve_ticket_endpoint(
     # it survives an error response whose body must stay unchanged.
     response.headers[SESSION_ID_HEADER] = session_id
 
-    result = run_agent(request.message, settings, groq_client)
+    result = run_agent(request.message, settings, groq_client, history=history)
 
     # A transcript that cannot be stored must not discard the answer, so the
     # outcome is reported instead of raised.
-    persisted = persist_agent_run(database, session_id, request.message, result)
+    persisted = persist_agent_run(
+        database,
+        session_id,
+        request.message,
+        result,
+        correlation_id=run_id,
+    )
     response.headers[TRANSCRIPT_STORED_HEADER] = "true" if persisted else "false"
 
     if result.status == "mock":

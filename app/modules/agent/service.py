@@ -8,9 +8,9 @@ responsibilities:
    that actually exists and is usable.
 2. Turning the outcome of an agent run into an ordered transcript.
 
-The transcript is stored for later retrieval only. Stored history is **not**
-replayed into the model yet; that belongs to a later milestone, and doing so
-would change the provider request payload of the verified agent loop.
+The transcript is stored for later retrieval, and the stored turns of a
+session are replayed into a continuing run, bounded by the configured
+maximum history size.
 """
 
 from __future__ import annotations
@@ -18,11 +18,13 @@ from __future__ import annotations
 import json
 import logging
 import uuid
-from typing import Any
+from typing import Any, Iterable
 
 import psycopg
 
 from app.agent_core.agent import AgentResult
+from app.core.config import DEFAULT_MAX_HISTORY_MESSAGES
+from app.modules.agent.history import load_history_items
 from app.persistence.db import Database
 from app.persistence.models import (
     ROLE_ASSISTANT,
@@ -105,6 +107,34 @@ def resolve_session_id(db: Database, requested_session_id: str | None) -> str:
         if session.status == SESSION_STATUS_CLOSED:
             raise SessionClosedError(session_id)
         return session_id
+    except psycopg.Error as exc:
+        raise StorageError("The session store is unavailable.") from exc
+
+
+def load_session_history(
+    db: Database,
+    session_id: str,
+    *,
+    max_messages: int = DEFAULT_MAX_HISTORY_MESSAGES,
+    exclude_correlation_ids: Iterable[str] | None = None,
+) -> list[dict[str, Any]]:
+    """Return the prior turns of a session as provider input items.
+
+    The transcript is read before the run starts, so the message of the
+    current run is not part of the history. The caller passes the id of the
+    run it is about to start in ``exclude_correlation_ids``, so the messages
+    of that run are left out as well.
+
+    A storage failure is reported as a :class:`StorageError`, like the other
+    reads of the session store.
+    """
+    try:
+        return load_history_items(
+            db,
+            session_id,
+            max_messages=max_messages,
+            exclude_correlation_ids=exclude_correlation_ids,
+        )
     except psycopg.Error as exc:
         raise StorageError("The session store is unavailable.") from exc
 

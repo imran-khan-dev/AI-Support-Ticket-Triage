@@ -277,6 +277,20 @@ the session id, so the client can recover it and continue the conversation
 later. The answer is returned even when the transcript could not be stored,
 because the answer is the primary result of the request.
 
+### Continuing a conversation
+
+A run that passes a `session_id` receives the earlier turns of that session.
+The transcript is read from PostgreSQL in sequence order, only for that
+session, and is bounded by `AGENT_MAX_HISTORY_MESSAGES`:
+
+* the message of the current run is not part of the history, and is sent to
+  the provider exactly once;
+* a tool call and its output are always replayed together, so a call is never
+  separated from its output;
+* a replayed tool call gets a call id of its own, so it cannot be confused
+  with a call the model makes in the current turn;
+* the history of one session is never visible to another session.
+
 ## Running tests
 
 From the repository root, with the virtual environment activated:
@@ -305,4 +319,4 @@ application data.
 - `confidence` is a model-estimated score between 0.0 and 1.0, not a calibrated probability of correctness or measured accuracy.
 - Classification quality depends on the model and system prompt and should be evaluated against real tickets before production use.
 - When no `GROQ_API_KEY` is configured, responses come from the deterministic mock service, not a live model.
-- Stored conversation history is not yet replayed into the model. The loader that reads a session transcript and turns it into provider input items exists (`app/modules/agent/history.py`), but the agent endpoint does not use it yet. The memory, approval, and audit tables are not written to either; the schema exists so that those features can be built on it.
+- Stored conversation history is replayed into a continuing run, bounded by `AGENT_MAX_HISTORY_MESSAGES`. The memory, approval, and audit tables are not written to yet; the schema exists so that those features can be built on it.

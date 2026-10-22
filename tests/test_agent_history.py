@@ -14,8 +14,13 @@ network access.
 """
 
 import json
+import os
+from contextlib import contextmanager
+from unittest.mock import patch
 
+import psycopg
 import pytest
+from fastapi.testclient import TestClient
 
 from app.agent_core.agent import run_agent
 from app.core.config import DEFAULT_MAX_HISTORY_MESSAGES, Settings
@@ -26,9 +31,13 @@ from app.persistence import (
     create_session,
     list_messages,
 )
+from main import app
 
 
 pytestmark = pytest.mark.usefixtures("clean_database")
+
+#: The client of the agent endpoint.
+api_client = TestClient(app)
 
 
 # ---------------------------------------------------------------------------
@@ -79,13 +88,39 @@ class _FakeResponse:
         self.output_text = output_text
 
 
+class _FunctionCall:
+    """A function-call output item as the provider would return it."""
+
+    def __init__(self, call_id, name, arguments):
+        self.type = "function_call"
+        self.id = f"fc_{call_id}"
+        self.call_id = call_id
+        self.name = name
+        self.arguments = arguments
+
+    def model_dump(self):
+        return {
+            "id": self.id,
+            "type": self.type,
+            "call_id": self.call_id,
+            "name": self.name,
+            "arguments": self.arguments,
+        }
+
+
 class _FakeResponses:
     def __init__(self, responses):
         self._responses = list(responses)
         self.requests = []
 
     def create(self, **kwargs):
-        self.requests.append(kwargs)
+        # The agent reuses one mutable list for the request input. Snapshot
+        # the list, so each recorded request reflects the input as it was
+        # when the request was made.
+        recorded = dict(kwargs)
+        if "input" in recorded:
+            recorded["input"] = list(recorded["input"])
+        self.requests.append(recorded)
         if not self._responses:
             raise AssertionError("responses.create was called too often")
         return self._responses.pop(0)
@@ -102,7 +137,16 @@ def _settings():
         groq_api_key="test_key",
         groq_model="openai/gpt-oss-20b",
         groq_base_url="https://api.groq.com/openai/v1",
+        database_url=os.environ["DATABASE_URL"],
     )
+
+
+@contextmanager
+def _route(settings, groq_client=None):
+    """Point the agent endpoint at a settings object and a provider."""
+    with patch("app.modules.agent.route.settings", settings):
+        with patch("app.modules.agent.route.groq_client", groq_client):
+            yield
 
 
 # ---------------------------------------------------------------------------
@@ -273,11 +317,14 @@ def test_a_tool_call_is_replayed_in_the_responses_api_format(database):
     call = next(i for i in items if i["type"] == "function_call")
     output = next(i for i in items if i["type"] == "function_call_output")
 
-    assert call["call_id"] == "call_1"
+    # The replayed call and its output share one call id, and that id is of
+    # its own so it cannot collide with a call of the current turn.
+    assert call["call_id"] == output["call_id"]
+    assert call["call_id"].startswith("hist_call_")
+
     assert call["name"] == "search_support_docs"
     assert json.loads(call["arguments"]) == {"query": "password reset"}
 
-    assert output["call_id"] == "call_1"
     assert output["name"] == "search_support_docs"
     assert json.loads(output["output"])["tool"] == "search_support_docs"
 
@@ -443,3 +490,258 @@ def test_the_stored_transcript_is_not_changed_by_loading_it(database):
     load_history_items(database, session.id)
 
     assert list_messages(database, session.id) == before
+
+
+# ---------------------------------------------------------------------------
+# Endpoint integration
+# ---------------------------------------------------------------------------
+
+
+def _post(message, session_id=None):
+    return api_client.post(
+        "/api/v1/tickets/agent/run",
+        json={"message": message, "session_id": session_id},
+    )
+
+
+def test_the_first_turn_is_persisted(database):
+    """A first run stores its message and its answer."""
+    fake_client = _FakeClient([_FakeResponse(output_text="The answer.")])
+
+    with _route(_settings(), fake_client):
+        response = _post("First question.")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "success"
+
+    messages = list_messages(database, response.json()["session_id"])
+    assert [message.role for message in messages] == ["user", "assistant"]
+    assert [message.content for message in messages] == [
+        "First question.",
+        "The answer.",
+    ]
+
+
+def test_the_second_turn_receives_the_prior_history(database):
+    """A continuing run receives the earlier turns of its session."""
+    fake_client = _FakeClient(
+        [
+            _FakeResponse(output_text="First answer."),
+            _FakeResponse(output_text="Second answer."),
+        ]
+    )
+
+    with _route(_settings(), fake_client):
+        first = _post("First question.")
+        second = _post(
+            "Second question.", session_id=first.json()["session_id"]
+        )
+
+    assert second.status_code == 200
+
+    request_input = fake_client.responses.requests[1]["input"]
+    assert _texts(request_input) == [
+        "First question.",
+        "First answer.",
+        "Second question.",
+    ]
+
+
+def test_the_current_message_is_sent_exactly_once(database):
+    """The message of the current run is not replayed from the history."""
+    fake_client = _FakeClient(
+        [
+            _FakeResponse(output_text="First answer."),
+            _FakeResponse(output_text="Second answer."),
+        ]
+    )
+
+    with _route(_settings(), fake_client):
+        first = _post("First question.")
+        _post("Second question.", session_id=first.json()["session_id"])
+
+    request_input = fake_client.responses.requests[1]["input"]
+    user_texts = [
+        item["content"][0]["text"]
+        for item in request_input
+        if item.get("type") == "message" and item.get("role") == "user"
+    ]
+    assert user_texts == ["First question.", "Second question."]
+
+    # The identifiers of the request items are unique.
+    identifiers = [item["id"] for item in request_input]
+    assert len(set(identifiers)) == len(identifiers)
+
+
+def test_a_tool_call_stays_paired_with_its_output_across_turns(database):
+    """A tool call of an earlier turn is replayed as a valid pair."""
+    fake_client = _FakeClient(
+        [
+            _FakeResponse(
+                output=[
+                    _FunctionCall(
+                        "call_1",
+                        "search_support_docs",
+                        '{"query": "billing"}',
+                    )
+                ]
+            ),
+            _FakeResponse(output_text="First answer."),
+            _FakeResponse(output_text="Second answer."),
+        ]
+    )
+
+    with _route(_settings(), fake_client):
+        first = _post("First question.")
+        second = _post(
+            "Second question.", session_id=first.json()["session_id"]
+        )
+
+    assert second.status_code == 200
+
+    request_input = fake_client.responses.requests[2]["input"]
+    calls = [
+        item
+        for item in request_input
+        if item.get("type") == "function_call"
+    ]
+    outputs = [
+        item
+        for item in request_input
+        if item.get("type") == "function_call_output"
+    ]
+
+    assert len(calls) == 1
+    assert len(outputs) == 1
+
+    # The pair is matched by its call id, and the call comes first.
+    assert calls[0]["call_id"] == outputs[0]["call_id"]
+    assert calls[0]["name"] == "search_support_docs"
+    assert outputs[0]["name"] == "search_support_docs"
+    assert json.loads(calls[0]["arguments"]) == {"query": "billing"}
+    assert json.loads(outputs[0]["output"])["tool"] == "search_support_docs"
+
+    call_index = request_input.index(calls[0])
+    output_index = request_input.index(outputs[0])
+    assert call_index < output_index
+
+    # The replayed call id cannot be the id of a call of the current turn.
+    assert calls[0]["call_id"] != "call_1"
+
+
+def test_a_session_cannot_access_the_history_of_another_session(database):
+    """Every run only receives the history of its own session."""
+    fake_client = _FakeClient(
+        [
+            _FakeResponse(output_text="First answer."),
+            _FakeResponse(output_text="Second answer."),
+        ]
+    )
+
+    with _route(_settings(), fake_client):
+        first = _post("Question for the first session.")
+        second = _post("Question for the second session.")
+
+    assert first.json()["session_id"] != second.json()["session_id"]
+
+    first_input = fake_client.responses.requests[0]["input"]
+    second_input = fake_client.responses.requests[1]["input"]
+
+    assert _texts(first_input) == ["Question for the first session."]
+    assert _texts(second_input) == ["Question for the second session."]
+
+
+def test_the_history_of_a_session_is_bounded(database):
+    """The endpoint replays no more than the configured number of turns."""
+    settings = _settings()
+    settings.agent_max_history_messages = 2
+
+    fake_client = _FakeClient(
+        [
+            _FakeResponse(output_text="First answer."),
+            _FakeResponse(output_text="Second answer."),
+        ]
+    )
+
+    with _route(settings, fake_client):
+        first = _post("First question.")
+        _post("Second question.", session_id=first.json()["session_id"])
+
+    request_input = fake_client.responses.requests[1]["input"]
+    assert _texts(request_input) == [
+        "First question.",
+        "First answer.",
+        "Second question.",
+    ]
+
+    settings.agent_max_history_messages = 1
+    fake_client = _FakeClient(
+        [
+            _FakeResponse(output_text="First answer."),
+            _FakeResponse(output_text="Second answer."),
+        ]
+    )
+
+    with _route(settings, fake_client):
+        first = _post("First question.")
+        _post("Second question.", session_id=first.json()["session_id"])
+
+    request_input = fake_client.responses.requests[1]["input"]
+    assert _texts(request_input) == ["First answer.", "Second question."]
+
+
+def test_mock_mode_still_works(database):
+    """A run without a provider key answers from the mock service."""
+    with _route(_settings(), None):
+        response = _post("Help me.")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "mock"
+    assert response.json()["mock_mode"] is True
+    assert response.json()["answer"]
+    assert response.json()["session_id"]
+
+    messages = list_messages(database, response.json()["session_id"])
+    assert [message.role for message in messages] == ["user", "assistant"]
+
+
+def test_a_failing_history_read_answers_service_unavailable(database):
+    """A storage failure while reading the history is reported as such."""
+    fake_client = _FakeClient([_FakeResponse(output_text="The answer.")])
+
+    with patch(
+        "app.modules.agent.service.load_history_items",
+        side_effect=psycopg.OperationalError("storage is down"),
+    ):
+        with _route(_settings(), fake_client):
+            response = _post("A question.")
+
+    assert response.status_code == 503
+    assert "storage" in response.json()["detail"].lower()
+
+    # The provider was never asked: the run did not start.
+    assert fake_client.responses.requests == []
+
+
+def test_mock_mode_keeps_storing_the_transcript_of_a_session(database):
+    """A continuing mock run is stored like any other run."""
+    with _route(_settings(), None):
+        first = _post("First question.")
+        second = _post(
+            "Second question.", session_id=first.json()["session_id"]
+        )
+
+    assert second.status_code == 200
+
+    messages = list_messages(database, first.json()["session_id"])
+    assert [message.role for message in messages] == [
+        "user",
+        "assistant",
+        "user",
+        "assistant",
+    ]
+    assert [
+        message.content
+        for message in messages
+        if message.role == "user"
+    ] == ["First question.", "Second question."]
