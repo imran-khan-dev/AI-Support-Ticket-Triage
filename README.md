@@ -162,6 +162,7 @@ DATABASE_URL=postgresql://postgres:your_password@localhost:5432/ticket_triage
 | `AGENT_MAX_HISTORY_MESSAGES` | Optional | Maximum number of stored messages of a session that are replayed into a continuing agent run. A tool call and its output are always replayed together, so the effective history can be shorter. Zero disables the replay. | `20` |
 | `AGENT_MAX_MEMORY_ITEMS` | Optional | Maximum number of stored memories of a session that are recalled into an agent run. Zero disables the recall. | `3` |
 | `AGENT_MAX_MEMORY_CHARS` | Optional | Maximum number of characters of recalled memory that are injected into an agent run, the label of the context included. Zero disables the recall. | `1200` |
+| `APPROVER_TOKEN_SECRET` | Optional | Server side secret that keys the digests of the approver credentials. It is never stored in the database. When it is not configured, approver credentials cannot be created or verified. | `None` |
 
 ### Behavior without live AI configuration
 

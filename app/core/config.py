@@ -69,3 +69,12 @@ class Settings(BaseSettings):
         "the AGENT_MAX_MEMORY_CHARS environment variable. Zero disables the "
         "recall.",
     )
+
+    approver_token_secret: str | None = Field(
+        default=None,
+        description="Server side secret that keys the digests of the approver "
+        "credentials. Read from the APPROVER_TOKEN_SECRET environment "
+        "variable. It never leaves the server and is never stored in the "
+        "database. When it is not configured, approver credentials cannot "
+        "be created or verified.",
+    )

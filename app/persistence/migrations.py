@@ -198,12 +198,31 @@ ALTER TABLE audit_events
 CREATE INDEX ix_audit_events_action_id ON audit_events (action_id);
 """
 
+# ---------------------------------------------------------------------------
+# Migration 4: make the credential of an approver unique
+# ---------------------------------------------------------------------------
+#
+# The digest of a credential is the identifier of that credential: it is
+# what a presented credential is looked up by. The column was not unique
+# and not even indexed, so the same credential could be held by two
+# approvers and the lookup could not tell them apart.
+#
+# The index is unique, so a credential belongs to exactly one approver.
+# The table holds no rows in a database that never stored an approver, so
+# the index is applied without a conflict; a database that does hold
+# approvers with the same digest would fail this migration and keep its
+# previous schema, because a migration is applied in one transaction.
+MIGRATION_4 = """
+CREATE UNIQUE INDEX ux_approvers_token_hash ON approvers (token_hash);
+"""
+
 # Ordered list of (version, name, sql) triples. Never edit an applied
 # migration; append a new numbered entry instead.
 MIGRATIONS: list[tuple[int, str, str]] = [
     (1, "initial_schema", MIGRATION_1),
     (2, "memory_full_text_search", MIGRATION_2),
     (3, "action_audit_link", MIGRATION_3),
+    (4, "approver_credential_uniqueness", MIGRATION_4),
 ]
 
 #: Arbitrary key for the advisory lock that serializes migration runs.

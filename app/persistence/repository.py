@@ -12,6 +12,7 @@ appends to the same session can never reserve the same number.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import re
 import uuid
 from datetime import datetime, timezone
@@ -23,11 +24,13 @@ from app.persistence.models import (
     ACTION_STATE_APPROVED,
     ACTION_STATE_EXECUTED,
     ACTION_STATE_PENDING,
+    APPROVER_ROLES,
     EXECUTION_STATUSES,
     SESSION_STATUS_CLOSED,
     SESSION_STATUS_OPEN,
     Action,
     ActionTransition,
+    Approver,
     AuditDraft,
     AuditEvent,
     Memory,
@@ -36,6 +39,7 @@ from app.persistence.models import (
     MessageDraft,
     Session,
     action_from_row,
+    approver_from_row,
     audit_event_from_row,
     memory_from_row,
     message_from_row,
@@ -57,6 +61,9 @@ MEMORY_SEARCH_RESULT_LIMIT = 10
 
 #: Default number of actions a listing returns.
 ACTION_LIST_LIMIT = 50
+
+#: Default number of approvers a listing returns.
+APPROVER_LIST_LIMIT = 50
 
 #: The words of a search query. The query text is split into these before it
 #: is turned into a tsquery.
@@ -922,3 +929,163 @@ def mark_action_executed_with_audit(
             outcome=execution_status,
         )
     return ActionTransition(action=action, changed=True)
+
+
+# ---------------------------------------------------------------------------
+# Approvers
+# ---------------------------------------------------------------------------
+#
+# An approver is an identity that may decide actions. The credential of an
+# approver is never stored: the column holds the digest of it, and the
+# digest is the identifier of the credential. The digest is unique, so a
+# credential belongs to exactly one approver.
+# ---------------------------------------------------------------------------
+
+
+def create_approver(
+    db: Database,
+    *,
+    display_name: str,
+    role: str,
+    token_hash: str,
+    approver_id: str | None = None,
+) -> Approver:
+    """Create an approver and return it.
+
+    The argument is the digest of the credential, never the credential
+    itself. The digest has to be the one of a credential that is not in use
+    yet: the column is unique, and a second approver with the same digest
+    is refused by the database.
+    """
+    if role not in APPROVER_ROLES:
+        raise ValueError(f"Unsupported approver role: {role!r}")
+    if not token_hash:
+        raise ValueError("The credential digest must not be empty.")
+
+    with db.write_transaction() as conn:
+        row = conn.execute(
+            "INSERT INTO approvers"
+            " (id, display_name, role, token_hash, active, created_at)"
+            " VALUES (%s, %s, %s, %s, %s, %s)"
+            " RETURNING id, display_name, role, active, created_at",
+            (
+                approver_id or str(uuid.uuid4()),
+                display_name,
+                role,
+                token_hash,
+                True,
+                utc_now(),
+            ),
+        ).fetchone()
+
+    if row is None:
+        raise RuntimeError("The approver was not stored.")
+    return approver_from_row(row)
+
+
+def get_approver(db: Database, approver_id: str) -> Approver | None:
+    """Return the approver with this id, or ``None`` when it does not exist."""
+    canonical = _canonical_uuid(approver_id)
+    if canonical is None:
+        return None
+    with db.connection() as conn:
+        row = conn.execute(
+            "SELECT id, display_name, role, active, created_at"
+            " FROM approvers WHERE id = %s",
+            (canonical,),
+        ).fetchone()
+    if row is None:
+        return None
+    return approver_from_row(row)
+
+
+def get_approver_by_token_hash(
+    db: Database,
+    token_hash: str,
+) -> Approver | None:
+    """Return the approver that holds this credential digest.
+
+    The digest is the identifier of a credential, and the column is unique,
+    so at most one approver holds it. The stored digest is compared with
+    the one that was given in constant time, and it is never returned.
+    """
+    if not token_hash:
+        return None
+    if not token_hash.isascii():
+        return None
+    with db.connection() as conn:
+        row = conn.execute(
+            "SELECT id, display_name, role, active, created_at, token_hash"
+            " FROM approvers WHERE token_hash = %s",
+            (token_hash,),
+        ).fetchone()
+    if row is None:
+        return None
+    if not hmac.compare_digest(str(row["token_hash"]), token_hash):
+        return None
+    return approver_from_row(row)
+
+
+def list_approvers(
+    db: Database,
+    *,
+    role: str | None = None,
+    active: bool | None = None,
+    limit: int = APPROVER_LIST_LIMIT,
+) -> list[Approver]:
+    """Return the approvers that match the filters, oldest first.
+
+    Every filter is optional. The result is bounded by ``limit``, and the
+    limit is applied by the database.
+    """
+    if limit <= 0:
+        return []
+
+    clauses: list[str] = []
+    parameters: list[object] = []
+
+    if role is not None:
+        clauses.append("role = %s")
+        parameters.append(role)
+
+    if active is not None:
+        clauses.append("active = %s")
+        parameters.append(active)
+
+    where = " WHERE " + " AND ".join(clauses) if clauses else ""
+    parameters.append(limit)
+
+    with db.connection() as conn:
+        rows = conn.execute(
+            "SELECT id, display_name, role, active, created_at"
+            " FROM approvers" + where + " ORDER BY created_at, id LIMIT %s",
+            tuple(parameters),
+        ).fetchall()
+    return [approver_from_row(row) for row in rows]
+
+
+def set_approver_active(
+    db: Database,
+    approver_id: str,
+    active: bool,
+) -> Approver | None:
+    """Activate or deactivate an approver and return the stored row.
+
+    Returns ``None`` when the approver does not exist. A deactivated
+    approver keeps its credential, but the credential no longer grants
+    anything.
+    """
+    canonical = _canonical_uuid(approver_id)
+    if canonical is None:
+        return None
+
+    with db.write_transaction() as conn:
+        row = conn.execute(
+            "UPDATE approvers SET active = %s WHERE id = %s"
+            " RETURNING id, display_name, role, active, created_at",
+            (active, canonical),
+        ).fetchone()
+
+    if row is None:
+        return None
+    return approver_from_row(row)
