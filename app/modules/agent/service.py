@@ -18,7 +18,7 @@ from __future__ import annotations
 import json
 import logging
 import uuid
-from typing import Any, Iterable
+from typing import Any, Iterable, Sequence
 
 import psycopg
 
@@ -38,6 +38,7 @@ from app.persistence.models import (
     ROLE_TOOL,
     ROLE_USER,
     SESSION_STATUS_CLOSED,
+    Message,
     MessageDraft,
 )
 from app.persistence.repository import (
@@ -234,21 +235,26 @@ def persist_agent_run(
     message: str,
     result: AgentResult,
     correlation_id: str | None = None,
-) -> bool:
+) -> list[Message]:
     """Store the transcript of an agent run.
 
     ``correlation_id`` identifies the run. The caller can pass the id of the
     run it is about to start, so that the same id can be used to keep the
     messages of that run out of the history of a later one.
 
-    Returns ``True`` when the transcript was written and ``False`` when it
-    could not be. A storage failure is logged rather than raised: the agent's
-    answer is the primary result of the request and must not be discarded
-    because the transcript could not be written. The caller reports the
-    outcome so the client can tell a stored transcript from a lost one.
+    Returns the stored messages, oldest first, and an empty list when the
+    transcript could not be written. A storage failure is logged rather than
+    raised: the agent's answer is the primary result of the request and must
+    not be discarded because the transcript could not be written. The caller
+    reports the outcome so the client can tell a stored transcript from a
+    lost one.
+
+    The stored rows are returned because a later step of the run refers to
+    the answer of the agent: the memory of the run points at the stored
+    message, and that id is known only after the row was written.
     """
     try:
-        append_messages(
+        return append_messages(
             db,
             session_id,
             build_transcript(message, result),
@@ -260,8 +266,25 @@ def persist_agent_run(
         logger.exception(
             "Failed to persist the transcript for session %s", session_id
         )
-        return False
-    return True
+        return []
+
+
+def final_answer_message_id(messages: Sequence[Message]) -> int | None:
+    """Return the id of the stored final answer of a run.
+
+    The final answer is the last stored message of the role assistant that
+    is not a tool call. A tool call is stored with the name of the tool it
+    called, so a record of the role assistant without that name is the
+    answer of the agent.
+
+    Returns ``None`` when the run stored no answer, which is the case for a
+    run that failed and for a run that did not produce one.
+    """
+    answer_id: int | None = None
+    for message in messages:
+        if message.role == ROLE_ASSISTANT and message.tool_name is None:
+            answer_id = message.id
+    return answer_id
 
 
 def store_run_memory(

@@ -13,11 +13,13 @@ from app.modules.agent.service import (
     SessionClosedError,
     SessionNotFoundError,
     StorageError,
+    final_answer_message_id,
     load_session_history,
     load_session_memory,
     persist_agent_run,
     prepare_session_store,
     resolve_session_id,
+    store_run_memory,
 )
 
 
@@ -71,6 +73,12 @@ async def resolve_ticket_endpoint(
     best-effort: a storage failure is logged and the run continues without
     them, because the answer matters more than the recall. The memories are
     not part of the stored transcript.
+
+    A successful run stores a memory of its answer, once the transcript was
+    stored. The memory points at the stored answer of the agent, so that the
+    two can be traced back to each other, and the session does not store the
+    same memory twice. Writing it is best-effort: a storage failure is
+    logged, and the answer is returned either way.
 
     The session id is returned in the ``X-Session-Id`` header as well as in
     the response body, so that a client can recover it even when the run ends
@@ -137,16 +145,25 @@ async def resolve_ticket_endpoint(
 
     result = run_agent(request.message, settings, groq_client, history=history)
 
-    # A transcript that cannot be stored must not discard the answer, so the
-    # outcome is reported instead of raised.
-    persisted = persist_agent_run(
+    # The transcript is stored first: the memory of the run points at the
+    # stored answer of the agent, so that message has to exist before the
+    # memory can be written.
+    stored_messages = persist_agent_run(
         database,
         session_id,
         request.message,
         result,
         correlation_id=run_id,
     )
+    persisted = bool(stored_messages)
     response.headers[TRANSCRIPT_STORED_HEADER] = "true" if persisted else "false"
+
+    # The memory of the run is written after the transcript and never changes
+    # the answer: a memory that cannot be stored is logged, not raised. A run
+    # without a stored answer has no memory to point at.
+    answer_message_id = final_answer_message_id(stored_messages)
+    if answer_message_id is not None:
+        store_run_memory(database, session_id, result, answer_message_id)
 
     if result.status == "mock":
         return TicketResolveResponse(
