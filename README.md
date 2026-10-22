@@ -160,6 +160,8 @@ DATABASE_URL=postgresql://postgres:your_password@localhost:5432/ticket_triage
 | `GROQ_BASE_URL` | Optional | Base URL for the Groq API. | `None` |
 | `DATABASE_URL` | Required for the agent endpoint | PostgreSQL connection string for session, message, approval, and audit storage. | `None` |
 | `AGENT_MAX_HISTORY_MESSAGES` | Optional | Maximum number of stored messages of a session that are replayed into a continuing agent run. A tool call and its output are always replayed together, so the effective history can be shorter. Zero disables the replay. | `20` |
+| `AGENT_MAX_MEMORY_ITEMS` | Optional | Maximum number of stored memories of a session that are recalled into an agent run. Zero disables the recall. | `3` |
+| `AGENT_MAX_MEMORY_CHARS` | Optional | Maximum number of characters of recalled memory that are injected into an agent run, the label of the context included. Zero disables the recall. | `1200` |
 
 ### Behavior without live AI configuration
 
@@ -291,6 +293,52 @@ session, and is bounded by `AGENT_MAX_HISTORY_MESSAGES`:
   with a call the model makes in the current turn;
 * the history of one session is never visible to another session.
 
+### Memories
+
+A session keeps a memory of what the agent told the customer, so that a later
+run of the same session can take it into account. A memory belongs to exactly
+one session and is never visible to another one.
+
+**Writing a memory.** A run stores at most one memory, and only after its
+transcript was stored:
+
+* only a successful run writes a memory. A mock answer, a provider failure,
+  and a run that ran out of iterations write nothing;
+* the content is the answer of the agent and nothing else. The message of the
+  customer, the tool calls, the tool results, and the error text are never
+  part of a memory;
+* the answer is normalized first: control characters are removed, and every
+  run of whitespace becomes a single space;
+* an answer that is empty, or shorter than 24 characters, is not stored;
+* a longer answer is shortened to 400 characters, at a word boundary where
+  possible;
+* the kind of the memory is `summary`: it records what the agent said, not a
+  verified fact about the customer;
+* the memory points at the stored answer of the run through `source_msg_id`,
+  so that the two can be traced back to each other. When that message is
+  deleted, the reference is cleared and the memory is kept.
+
+The same content is not stored twice in a session: an exact match is skipped.
+The check is a read that is followed by a write, and the two are not one
+atomic step, so two concurrent runs of the same session can still store the
+same content twice. The table has no unique constraint that could rule this
+out.
+
+Writing a memory is best-effort. A storage failure is logged, and the answer
+is returned unchanged: the body, the status, and the headers of the response
+are the same whether the memory was stored or not.
+
+**Recalling a memory.** Before the run, the memories of the session that match
+the message of the customer are searched with the full-text index of the
+database, bounded by `AGENT_MAX_MEMORY_ITEMS` and `AGENT_MAX_MEMORY_CHARS`.
+They are placed in front of the conversation as one labelled item of the role
+`system`, and the text inside it is treated as untrusted data, never as
+instructions. Recalling them is best-effort as well: a storage failure is
+logged, and the run continues without them.
+
+No model is used to extract a memory: the stored text is the answer of the
+agent, unchanged apart from the normalization and the cap described above.
+
 ## Running tests
 
 From the repository root, with the virtual environment activated:
@@ -319,4 +367,4 @@ application data.
 - `confidence` is a model-estimated score between 0.0 and 1.0, not a calibrated probability of correctness or measured accuracy.
 - Classification quality depends on the model and system prompt and should be evaluated against real tickets before production use.
 - When no `GROQ_API_KEY` is configured, responses come from the deterministic mock service, not a live model.
-- Stored conversation history is replayed into a continuing run, bounded by `AGENT_MAX_HISTORY_MESSAGES`. The stored memories of a session are recalled into a run, bounded by `AGENT_MAX_MEMORY_ITEMS` and `AGENT_MAX_MEMORY_CHARS`, and placed in front of the conversation as one labelled item of the role `system`: recalled content is untrusted data, not instructions. Nothing writes memories yet, so the recall stays empty until a writer exists. The approval and audit tables are not written to either; the schema exists so that those features can be built on it.
+- Stored conversation history is replayed into a continuing run, bounded by `AGENT_MAX_HISTORY_MESSAGES`. The memories of a session are written after a successful run and recalled into a later run, bounded by `AGENT_MAX_MEMORY_ITEMS` and `AGENT_MAX_MEMORY_CHARS`, and placed in front of the conversation as one labelled item of the role `system`: recalled content is untrusted data, not instructions. A memory holds what the agent said, is scoped to one session, and is not extracted by a model. The duplicate check is an exact-content comparison that is not atomic, so concurrent runs of one session can store the same content twice. The approval and audit tables are not written to either; the schema exists so that those features can be built on it.
