@@ -51,6 +51,10 @@ class UnknownSessionError(LookupError):
     """Raised when a write targets a session that does not exist."""
 
 
+class ActionConflictError(RuntimeError):
+    """Raised when an idempotency key is reused for a different action."""
+
+
 #: Maximum number of characters a stored memory may hold. A memory is a
 #: distilled fact, not a transcript, so the content is capped when it is
 #: stored. A memory can therefore never flood a prompt.
@@ -929,6 +933,93 @@ def mark_action_executed_with_audit(
             outcome=execution_status,
         )
     return ActionTransition(action=action, changed=True)
+
+
+def create_action_with_audit(
+    db: Database,
+    *,
+    request_key: str,
+    tool_name: str,
+    effect_class: str,
+    args: str,
+    requested_by: str,
+    correlation_id: str,
+    args_hash: str | None = None,
+    session_id: str | None = None,
+    action_id: str | None = None,
+    audit_draft: AuditDraft,
+) -> tuple[Action, AuditEvent | None, bool]:
+    canonical = _canonical_session_id(session_id) if session_id else None
+    if session_id and canonical is None:
+        raise UnknownSessionError(session_id)
+
+    run_id = _canonical_uuid(correlation_id)
+    if run_id is None:
+        raise ValueError("The correlation id must be a UUID.")
+
+    digest = args_hash or hashlib.sha256(args.encode("utf-8")).hexdigest()
+    now = utc_now()
+
+    with db.write_transaction() as conn:
+        if canonical is not None:
+            session = conn.execute(
+                "SELECT id FROM sessions WHERE id = %s", (canonical,)
+            ).fetchone()
+            if session is None:
+                raise UnknownSessionError(session_id)
+
+        existing = conn.execute(
+            "SELECT id, request_key, session_id, correlation_id, tool_name,"
+            " effect_class, args, args_hash, state, requested_by, requested_at,"
+            " decided_by, decided_at, decision_reason, execution_status,"
+            " execution_error, executed_by, executed_at"
+            " FROM actions WHERE request_key = %s",
+            (request_key,),
+        ).fetchone()
+        if existing is not None:
+            existing_action = action_from_row(existing)
+            if (
+                existing_action.tool_name != tool_name
+                or existing_action.args_hash != digest
+            ):
+                raise ActionConflictError(
+                    "The request key is already used for a different request."
+                )
+            return existing_action, None, False
+
+        row = conn.execute(
+            "INSERT INTO actions"
+            " (id, request_key, session_id, correlation_id, tool_name,"
+            "  effect_class, args, args_hash, state, requested_by, requested_at)"
+            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
+            " RETURNING id, request_key, session_id, correlation_id, tool_name,"
+            " effect_class, args, args_hash, state, requested_by, requested_at,"
+            " decided_by, decided_at, decision_reason, execution_status,"
+            " execution_error, executed_by, executed_at",
+            (
+                action_id or str(uuid.uuid4()),
+                request_key,
+                canonical,
+                run_id,
+                tool_name,
+                effect_class,
+                args,
+                digest,
+                ACTION_STATE_PENDING,
+                requested_by,
+                now,
+            ),
+        ).fetchone()
+        if row is None:
+            raise RuntimeError("The action was not stored.")
+        action = action_from_row(row)
+
+        event = _insert_audit_event(
+            conn,
+            audit_draft,
+            action_id=str(action.id),
+        )
+    return action, event, True
 
 
 # ---------------------------------------------------------------------------
