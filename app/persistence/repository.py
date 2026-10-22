@@ -11,6 +11,7 @@ appends to the same session can never reserve the same number.
 
 from __future__ import annotations
 
+import hashlib
 import re
 import uuid
 from datetime import datetime, timezone
@@ -18,13 +19,24 @@ from typing import Sequence
 
 from app.persistence.db import Database
 from app.persistence.models import (
+    ACTION_DECISION_STATES,
+    ACTION_STATE_APPROVED,
+    ACTION_STATE_EXECUTED,
+    ACTION_STATE_PENDING,
+    EXECUTION_STATUSES,
     SESSION_STATUS_CLOSED,
     SESSION_STATUS_OPEN,
+    Action,
+    ActionTransition,
+    AuditDraft,
+    AuditEvent,
     Memory,
     MemoryDraft,
     Message,
     MessageDraft,
     Session,
+    action_from_row,
+    audit_event_from_row,
     memory_from_row,
     message_from_row,
     session_from_row,
@@ -43,6 +55,9 @@ MEMORY_CONTENT_MAX_CHARS = 1000
 #: Default number of memories a search returns.
 MEMORY_SEARCH_RESULT_LIMIT = 10
 
+#: Default number of actions a listing returns.
+ACTION_LIST_LIMIT = 50
+
 #: The words of a search query. The query text is split into these before it
 #: is turned into a tsquery.
 _SEARCH_TERM = re.compile(r"[0-9A-Za-z]+")
@@ -51,13 +66,24 @@ _SEARCH_TERM = re.compile(r"[0-9A-Za-z]+")
 def _canonical_session_id(session_id: str) -> str | None:
     """Return the canonical form of a session id, or ``None`` when invalid.
 
-    PostgreSQL stores the session id in a ``UUID`` column, so a value that is
-    not a well-formed identifier can never match a row. Returning ``None``
+    PostgreSQL stores the session id in a ``UUID`` column, so a value that
+    is not a well-formed identifier can never match a row. Returning ``None``
     lets the read helpers answer "no such session" instead of raising a
     database error for a value the caller already rejected.
     """
+    return _canonical_uuid(session_id)
+
+
+def _canonical_uuid(value: str) -> str | None:
+    """Return the canonical form of a UUID, or ``None`` when invalid.
+
+    The identifiers of the rows of this layer are UUIDs, so a value that is
+    not a well-formed identifier can never match a row. Returning ``None``
+    lets the read helpers answer "no such row" instead of raising a database
+    error for a value the caller already rejected.
+    """
     try:
-        return str(uuid.UUID(str(session_id)))
+        return str(uuid.UUID(str(value)))
     except (ValueError, AttributeError, TypeError):
         return None
 
@@ -416,3 +442,483 @@ def search_memories(
             (content_limit, canonical, tsquery, tsquery, limit),
         ).fetchall()
     return [memory_from_row(row) for row in rows]
+
+
+# ---------------------------------------------------------------------------
+# Actions
+# ---------------------------------------------------------------------------
+#
+# An action is a request for a consequential operation. It starts out
+# pending, is moved to approved or rejected by a decision, and an approved
+# action is moved to executed when it was carried out. Every move is a
+# conditional update: the state of the row is part of the condition, so a
+# transition that was already made is never applied a second time.
+# ---------------------------------------------------------------------------
+
+
+def create_action(
+    db: Database,
+    *,
+    request_key: str,
+    tool_name: str,
+    effect_class: str,
+    args: str,
+    requested_by: str,
+    correlation_id: str,
+    args_hash: str | None = None,
+    session_id: str | None = None,
+    action_id: str | None = None,
+) -> Action:
+    """Create an action and return it.
+
+    The request key identifies the request. The same request that is sent
+    twice does not create a second action: the action of the first request
+    is returned instead, so the caller can continue with it and a retry
+    cannot queue the same operation twice.
+
+    The hash of the arguments is computed from the arguments when it is not
+    supplied, so that two requests with the same arguments can be told
+    apart from two requests with the same key but different arguments.
+    """
+    canonical = _canonical_session_id(session_id) if session_id else None
+    if session_id and canonical is None:
+        raise UnknownSessionError(session_id)
+
+    run_id = _canonical_uuid(correlation_id)
+    if run_id is None:
+        raise ValueError("The correlation id must be a UUID.")
+
+    digest = args_hash or hashlib.sha256(args.encode("utf-8")).hexdigest()
+    now = utc_now()
+
+    with db.write_transaction() as conn:
+        if canonical is not None:
+            session = conn.execute(
+                "SELECT id FROM sessions WHERE id = %s", (canonical,)
+            ).fetchone()
+            if session is None:
+                raise UnknownSessionError(session_id)
+
+        row = conn.execute(
+            "INSERT INTO actions"
+            " (id, request_key, session_id, correlation_id, tool_name,"
+            "  effect_class, args, args_hash, state, requested_by, requested_at)"
+            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
+            " ON CONFLICT (request_key) DO UPDATE"
+            " SET request_key = actions.request_key"
+            " RETURNING id, request_key, session_id, correlation_id, tool_name,"
+            " effect_class, args, args_hash, state, requested_by, requested_at,"
+            " decided_by, decided_at, decision_reason, execution_status,"
+            " execution_error, executed_by, executed_at",
+            (
+                action_id or str(uuid.uuid4()),
+                request_key,
+                canonical,
+                run_id,
+                tool_name,
+                effect_class,
+                args,
+                digest,
+                ACTION_STATE_PENDING,
+                requested_by,
+                now,
+            ),
+        ).fetchone()
+
+    if row is None:
+        raise RuntimeError("The action was not stored.")
+    return action_from_row(row)
+
+
+def get_action(db: Database, action_id: str) -> Action | None:
+    """Return the action with this id, or ``None`` when it does not exist."""
+    canonical = _canonical_uuid(action_id)
+    if canonical is None:
+        return None
+    with db.connection() as conn:
+        row = conn.execute(
+            "SELECT id, request_key, session_id, correlation_id, tool_name,"
+            " effect_class, args, args_hash, state, requested_by, requested_at,"
+            " decided_by, decided_at, decision_reason, execution_status,"
+            " execution_error, executed_by, executed_at"
+            " FROM actions WHERE id = %s",
+            (canonical,),
+        ).fetchone()
+    if row is None:
+        return None
+    return action_from_row(row)
+
+
+def list_actions(
+    db: Database,
+    *,
+    session_id: str | None = None,
+    state: str | None = None,
+    correlation_id: str | None = None,
+    limit: int = ACTION_LIST_LIMIT,
+) -> list[Action]:
+    """Return the actions that match the filters, oldest first.
+
+    Every filter is optional. A filter that cannot match anything, because
+    its value is not a well-formed identifier, returns an empty list rather
+    than every action.
+
+    The result is bounded by ``limit``, and the limit is applied by the
+    database.
+    """
+    if limit <= 0:
+        return []
+
+    clauses: list[str] = []
+    parameters: list[object] = []
+
+    if session_id is not None:
+        canonical = _canonical_session_id(session_id)
+        if canonical is None:
+            return []
+        clauses.append("session_id = %s")
+        parameters.append(canonical)
+
+    if state is not None:
+        clauses.append("state = %s")
+        parameters.append(state)
+
+    if correlation_id is not None:
+        run_id = _canonical_uuid(correlation_id)
+        if run_id is None:
+            return []
+        clauses.append("correlation_id = %s")
+        parameters.append(run_id)
+
+    where = " WHERE " + " AND ".join(clauses) if clauses else ""
+    parameters.append(limit)
+
+    with db.connection() as conn:
+        rows = conn.execute(
+            "SELECT id, request_key, session_id, correlation_id, tool_name,"
+            " effect_class, args, args_hash, state, requested_by, requested_at,"
+            " decided_by, decided_at, decision_reason, execution_status,"
+            " execution_error, executed_by, executed_at"
+            " FROM actions" + where + " ORDER BY requested_at, id LIMIT %s",
+            tuple(parameters),
+        ).fetchall()
+    return [action_from_row(row) for row in rows]
+
+
+def _decide_action_row(
+    conn,
+    canonical: str,
+    decision: str,
+    decided_by: str,
+    reason: str | None,
+    now: datetime,
+) -> tuple[Action | None, bool]:
+    """Move a pending action to a decided state on an open connection.
+
+    Returns the action and whether the transition was applied.
+    """
+    row = conn.execute(
+        "UPDATE actions SET state = %s, decided_by = %s, decided_at = %s,"
+        " decision_reason = %s WHERE id = %s AND state = %s"
+        " RETURNING id, request_key, session_id, correlation_id, tool_name,"
+        " effect_class, args, args_hash, state, requested_by, requested_at,"
+        " decided_by, decided_at, decision_reason, execution_status,"
+        " execution_error, executed_by, executed_at",
+        (
+            decision,
+            decided_by,
+            now,
+            reason,
+            canonical,
+            ACTION_STATE_PENDING,
+        ),
+    ).fetchone()
+    if row is not None:
+        return action_from_row(row), True
+
+    current = conn.execute(
+        "SELECT id, request_key, session_id, correlation_id, tool_name,"
+        " effect_class, args, args_hash, state, requested_by, requested_at,"
+        " decided_by, decided_at, decision_reason, execution_status,"
+        " execution_error, executed_by, executed_at"
+        " FROM actions WHERE id = %s",
+        (canonical,),
+    ).fetchone()
+    if current is None:
+        return None, False
+    return action_from_row(current), False
+
+
+def decide_action(
+    db: Database,
+    action_id: str,
+    *,
+    decision: str,
+    decided_by: str,
+    reason: str | None = None,
+) -> ActionTransition:
+    """Decide a pending action and return the outcome.
+
+    Only an action that is still pending can be decided. The update is
+    conditional, so a second decision cannot overwrite the first one, and a
+    decision that arrives after a rejection does not revive the action.
+
+    The result tells the two failure modes apart: an action that does not
+    exist has no action in it, and an action that is in the wrong state is
+    returned with ``changed`` set to ``False``.
+    """
+    if decision not in ACTION_DECISION_STATES:
+        raise ValueError(f"Unsupported action decision: {decision!r}")
+
+    canonical = _canonical_uuid(action_id)
+    if canonical is None:
+        return ActionTransition(action=None, changed=False)
+
+    with db.write_transaction() as conn:
+        action, changed = _decide_action_row(
+            conn, canonical, decision, decided_by, reason, utc_now()
+        )
+    return ActionTransition(action=action, changed=changed)
+
+
+def _mark_action_executed_row(
+    conn,
+    canonical: str,
+    execution_status: str,
+    executed_by: str,
+    execution_error: str | None,
+    now: datetime,
+) -> tuple[Action | None, bool]:
+    """Move an approved action to the executed state on an open connection.
+
+    Returns the action and whether the transition was applied.
+    """
+    row = conn.execute(
+        "UPDATE actions SET state = %s, execution_status = %s,"
+        " execution_error = %s, executed_by = %s, executed_at = %s"
+        " WHERE id = %s AND state = %s"
+        " RETURNING id, request_key, session_id, correlation_id, tool_name,"
+        " effect_class, args, args_hash, state, requested_by, requested_at,"
+        " decided_by, decided_at, decision_reason, execution_status,"
+        " execution_error, executed_by, executed_at",
+        (
+            ACTION_STATE_EXECUTED,
+            execution_status,
+            execution_error,
+            executed_by,
+            now,
+            canonical,
+            ACTION_STATE_APPROVED,
+        ),
+    ).fetchone()
+    if row is not None:
+        return action_from_row(row), True
+
+    current = conn.execute(
+        "SELECT id, request_key, session_id, correlation_id, tool_name,"
+        " effect_class, args, args_hash, state, requested_by, requested_at,"
+        " decided_by, decided_at, decision_reason, execution_status,"
+        " execution_error, executed_by, executed_at"
+        " FROM actions WHERE id = %s",
+        (canonical,),
+    ).fetchone()
+    if current is None:
+        return None, False
+    return action_from_row(current), False
+
+
+def mark_action_executed(
+    db: Database,
+    action_id: str,
+    *,
+    execution_status: str,
+    executed_by: str,
+    execution_error: str | None = None,
+) -> ActionTransition:
+    """Mark an approved action as executed and return the outcome.
+
+    Only an action that was approved can be executed, and only once: the
+    update is conditional, so an action that was executed already keeps its
+    state and its first result.
+
+    This records that an execution happened. It does not perform one: the
+    effect itself is outside of this layer.
+    """
+    if execution_status not in EXECUTION_STATUSES:
+        raise ValueError(
+            f"Unsupported execution status: {execution_status!r}"
+        )
+
+    canonical = _canonical_uuid(action_id)
+    if canonical is None:
+        return ActionTransition(action=None, changed=False)
+
+    with db.write_transaction() as conn:
+        action, changed = _mark_action_executed_row(
+            conn,
+            canonical,
+            execution_status,
+            executed_by,
+            execution_error,
+            utc_now(),
+        )
+    return ActionTransition(action=action, changed=changed)
+
+
+# ---------------------------------------------------------------------------
+# Audit events
+# ---------------------------------------------------------------------------
+#
+# An audit event records what happened. The table is append-only, so an
+# event cannot be changed or removed afterwards, and the trigger that
+# enforces this is part of the schema.
+# ---------------------------------------------------------------------------
+
+
+def _insert_audit_event(
+    conn,
+    draft: AuditDraft,
+    *,
+    action_id: str | None = None,
+    decision: str | None = None,
+    outcome: str | None = None,
+    actor_id: str | None = None,
+) -> AuditEvent:
+    """Insert an audit event on an open connection and return it.
+
+    The values that the caller knows better than the draft itself - the
+    action the event belongs to, the decision that was made, the outcome
+    that was reached, and the actor that acted - can be passed in, and take
+    the place of the ones of the draft.
+    """
+    resolved_action = action_id if action_id is not None else draft.action_id
+    resolved_decision = decision if decision is not None else draft.decision
+    resolved_outcome = outcome if outcome is not None else draft.outcome
+    resolved_actor = actor_id if actor_id is not None else draft.actor_id
+
+    row = conn.execute(
+        "INSERT INTO audit_events"
+        " (event_id, correlation_id, session_id, ticket_id, actor_type,"
+        "  actor_id, action, target, decision, outcome, payload, action_id,"
+        "  created_at)"
+        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
+        " RETURNING id, event_id, correlation_id, session_id, ticket_id,"
+        " actor_type, actor_id, action, target, decision, outcome, payload,"
+        " action_id, created_at",
+        (
+            str(uuid.uuid4()),
+            draft.correlation_id,
+            draft.session_id,
+            draft.ticket_id,
+            draft.actor_type,
+            resolved_actor,
+            draft.action,
+            draft.target,
+            resolved_decision,
+            resolved_outcome,
+            draft.payload,
+            resolved_action,
+            utc_now(),
+        ),
+    ).fetchone()
+    if row is None:
+        raise RuntimeError("The audit event was not stored.")
+    return audit_event_from_row(row)
+
+
+def append_audit_event(db: Database, draft: AuditDraft) -> AuditEvent:
+    """Store an audit event and return it.
+
+    The event is written in its own transaction, and it cannot be changed or
+    removed later: the table refuses to do that.
+    """
+    with db.write_transaction() as conn:
+        return _insert_audit_event(conn, draft)
+
+
+def decide_action_with_audit(
+    db: Database,
+    action_id: str,
+    *,
+    decision: str,
+    decided_by: str,
+    draft: AuditDraft,
+    reason: str | None = None,
+) -> ActionTransition:
+    """Decide an action and record the decision in one transaction.
+
+    The decision and the audit event are committed together: when the event
+    cannot be written, the decision is rolled back with it, so an action
+    never carries a decision that was not recorded.
+
+    The event is only written when the decision was applied. A decision
+    that was not applied leaves the action as it was and writes no event.
+    """
+    if decision not in ACTION_DECISION_STATES:
+        raise ValueError(f"Unsupported action decision: {decision!r}")
+
+    canonical = _canonical_uuid(action_id)
+    if canonical is None:
+        return ActionTransition(action=None, changed=False)
+
+    with db.write_transaction() as conn:
+        action, changed = _decide_action_row(
+            conn, canonical, decision, decided_by, reason, utc_now()
+        )
+        if not changed:
+            return ActionTransition(action=action, changed=False)
+        _insert_audit_event(
+            conn,
+            draft,
+            action_id=canonical,
+            decision=decision,
+            actor_id=decided_by,
+        )
+    return ActionTransition(action=action, changed=True)
+
+
+def mark_action_executed_with_audit(
+    db: Database,
+    action_id: str,
+    *,
+    execution_status: str,
+    executed_by: str,
+    draft: AuditDraft,
+    execution_error: str | None = None,
+) -> ActionTransition:
+    """Mark an action as executed and record the outcome in one transaction.
+
+    The execution and the audit event are committed together: when the event
+    cannot be written, the execution is rolled back with it, so an action
+    never carries a result that was not recorded.
+
+    The event is only written when the execution was applied.
+    """
+    if execution_status not in EXECUTION_STATUSES:
+        raise ValueError(
+            f"Unsupported execution status: {execution_status!r}"
+        )
+
+    canonical = _canonical_uuid(action_id)
+    if canonical is None:
+        return ActionTransition(action=None, changed=False)
+
+    with db.write_transaction() as conn:
+        action, changed = _mark_action_executed_row(
+            conn,
+            canonical,
+            execution_status,
+            executed_by,
+            execution_error,
+            utc_now(),
+        )
+        if not changed:
+            return ActionTransition(action=action, changed=False)
+        _insert_audit_event(
+            conn,
+            draft,
+            action_id=canonical,
+            actor_id=executed_by,
+            outcome=execution_status,
+        )
+    return ActionTransition(action=action, changed=True)

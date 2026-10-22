@@ -30,16 +30,19 @@ pytestmark = pytest.mark.usefixtures("clean_database")
 
 
 # ---------------------------------------------------------------------------
-# Migration 2
+# Migrations
 # ---------------------------------------------------------------------------
 
 
-def test_migration_2_is_applied(database):
+def test_the_schema_version_is_the_one_of_the_latest_migration(database):
     """The schema version is the one of the latest migration."""
     with database.connection() as conn:
-        assert current_version(conn) == 2
-    assert MIGRATIONS[-1][0] == 2
-    assert MIGRATIONS[-1][1] == "memory_full_text_search"
+        assert current_version(conn) == MIGRATIONS[-1][0]
+    assert MIGRATIONS[-1][0] == 3
+    assert MIGRATIONS[-1][1] == "action_audit_link"
+    assert (2, "memory_full_text_search") in [
+        (version, name) for version, name, _ in MIGRATIONS
+    ]
 
 
 def test_migration_2_adds_a_generated_search_column(database):
@@ -74,7 +77,7 @@ def test_the_migration_runner_stays_safe(database):
     """Applying the migrations again changes nothing."""
     assert database.initialize() == []
     with database.connection() as conn:
-        assert current_version(conn) == 2
+        assert current_version(conn) == MIGRATIONS[-1][0]
 
 
 def test_migration_1_left_the_memory_schema_intact(database):

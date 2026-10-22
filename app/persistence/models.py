@@ -37,6 +37,84 @@ MEMORY_KINDS = (
     MEMORY_KIND_OUTCOME,
 )
 
+#: The state of an action that waits for a decision.
+ACTION_STATE_PENDING = "pending"
+
+#: The state of an action that was approved.
+ACTION_STATE_APPROVED = "approved"
+
+#: The state of an action that was rejected.
+ACTION_STATE_REJECTED = "rejected"
+
+#: The state of an action that was executed.
+ACTION_STATE_EXECUTED = "executed"
+
+#: Every state an action may have. The database enforces the same set.
+ACTION_STATES = (
+    ACTION_STATE_PENDING,
+    ACTION_STATE_APPROVED,
+    ACTION_STATE_REJECTED,
+    ACTION_STATE_EXECUTED,
+)
+
+#: The states a decision can move an action to.
+ACTION_DECISION_STATES = (ACTION_STATE_APPROVED, ACTION_STATE_REJECTED)
+
+#: The outcome of an execution that succeeded.
+EXECUTION_STATUS_SUCCESS = "success"
+
+#: The outcome of an execution that failed.
+EXECUTION_STATUS_FAILURE = "failure"
+
+#: Every execution status the database accepts.
+EXECUTION_STATUSES = (EXECUTION_STATUS_SUCCESS, EXECUTION_STATUS_FAILURE)
+
+#: The roles an approver can have. The database enforces the same set.
+APPROVER_ROLE_AGENT = "agent"
+APPROVER_ROLE_SUPERVISOR = "supervisor"
+APPROVER_ROLE_BILLING_ADMIN = "billing_admin"
+APPROVER_ROLE_ADMIN = "admin"
+
+APPROVER_ROLES = (
+    APPROVER_ROLE_AGENT,
+    APPROVER_ROLE_SUPERVISOR,
+    APPROVER_ROLE_BILLING_ADMIN,
+    APPROVER_ROLE_ADMIN,
+)
+
+#: The kinds of actor an audit event can name. The database enforces the
+#: same set.
+AUDIT_ACTOR_TYPE_AGENT = "agent"
+AUDIT_ACTOR_TYPE_CUSTOMER = "customer"
+AUDIT_ACTOR_TYPE_APPROVER = "approver"
+AUDIT_ACTOR_TYPE_SYSTEM = "system"
+
+AUDIT_ACTOR_TYPES = (
+    AUDIT_ACTOR_TYPE_AGENT,
+    AUDIT_ACTOR_TYPE_CUSTOMER,
+    AUDIT_ACTOR_TYPE_APPROVER,
+    AUDIT_ACTOR_TYPE_SYSTEM,
+)
+
+#: The decisions an audit event can record.
+AUDIT_DECISION_APPROVED = "approved"
+AUDIT_DECISION_REJECTED = "rejected"
+
+AUDIT_DECISIONS = (AUDIT_DECISION_APPROVED, AUDIT_DECISION_REJECTED)
+
+#: The outcomes an audit event can record.
+AUDIT_OUTCOME_SUCCESS = "success"
+AUDIT_OUTCOME_FAILURE = "failure"
+AUDIT_OUTCOME_BLOCKED = "blocked"
+AUDIT_OUTCOME_DENIED = "denied"
+
+AUDIT_OUTCOMES = (
+    AUDIT_OUTCOME_SUCCESS,
+    AUDIT_OUTCOME_FAILURE,
+    AUDIT_OUTCOME_BLOCKED,
+    AUDIT_OUTCOME_DENIED,
+)
+
 
 @dataclass(frozen=True)
 class Session:
@@ -101,6 +179,105 @@ class MemoryDraft:
     source_msg_id: int | None = None
 
 
+@dataclass(frozen=True)
+class Action:
+    """A gated action that waits for a decision.
+
+    An action records what the agent wanted to do, which tool it wanted to
+    use, and the state of the request. The state moves from ``pending`` to
+    ``approved`` or ``rejected``, and from ``approved`` to ``executed``.
+    """
+
+    id: str
+    request_key: str
+    session_id: str | None
+    correlation_id: str
+    tool_name: str
+    effect_class: str
+    args: str
+    args_hash: str
+    state: str
+    requested_by: str
+    requested_at: str
+    decided_by: str | None
+    decided_at: str | None
+    decision_reason: str | None
+    execution_status: str | None
+    execution_error: str | None
+    executed_by: str | None
+    executed_at: str | None
+
+
+@dataclass(frozen=True)
+class ActionTransition:
+    """The outcome of a guarded state transition.
+
+    ``changed`` tells whether the transition was applied. When it was not,
+    ``action`` still holds the action when it exists, so that a caller can
+    tell an action that is in the wrong state from an action that does not
+    exist at all.
+    """
+
+    action: Action | None
+    changed: bool
+
+
+@dataclass(frozen=True)
+class Approver:
+    """An identity that may approve actions.
+
+    The stored credential of an approver is deliberately not exposed here:
+    nothing outside the persistence layer needs it.
+    """
+
+    id: str
+    display_name: str
+    role: str
+    active: bool
+    created_at: str
+
+
+@dataclass(frozen=True)
+class AuditDraft:
+    """An audit event that has not been written yet."""
+
+    actor_type: str
+    action: str
+    correlation_id: str
+    action_id: str | None = None
+    session_id: str | None = None
+    ticket_id: str | None = None
+    actor_id: str | None = None
+    target: str | None = None
+    decision: str | None = None
+    outcome: str | None = None
+    payload: str | None = None
+
+
+@dataclass(frozen=True)
+class AuditEvent:
+    """A stored audit event.
+
+    Audit events are append-only: the database refuses to change or remove
+    one, so the history of a decision cannot be rewritten.
+    """
+
+    id: int
+    event_id: str
+    correlation_id: str
+    session_id: str | None
+    ticket_id: str | None
+    actor_type: str
+    actor_id: str | None
+    action: str
+    target: str | None
+    decision: str | None
+    outcome: str | None
+    payload: str | None
+    action_id: str | None
+    created_at: str
+
+
 def to_iso8601(value: Any) -> str:
     """Render a timestamp as an ISO-8601 string in UTC.
 
@@ -158,5 +335,73 @@ def memory_from_row(row: Mapping[str, Any]) -> Memory:
         source_msg_id=(
             int(source_msg_id) if source_msg_id is not None else None
         ),
+        created_at=to_iso8601(row["created_at"]),
+    )
+
+
+def _optional_iso8601(value: Any) -> str | None:
+    """Render a nullable timestamp as an ISO-8601 string, or ``None``."""
+    if value is None:
+        return None
+    return to_iso8601(value)
+
+
+def action_from_row(row: Mapping[str, Any]) -> Action:
+    """Build an :class:`Action` from a database row."""
+    session_id = row["session_id"]
+    return Action(
+        id=str(row["id"]),
+        request_key=row["request_key"],
+        session_id=str(session_id) if session_id is not None else None,
+        correlation_id=str(row["correlation_id"]),
+        tool_name=row["tool_name"],
+        effect_class=row["effect_class"],
+        args=row["args"],
+        args_hash=row["args_hash"],
+        state=row["state"],
+        requested_by=row["requested_by"],
+        requested_at=to_iso8601(row["requested_at"]),
+        decided_by=row["decided_by"],
+        decided_at=_optional_iso8601(row["decided_at"]),
+        decision_reason=row["decision_reason"],
+        execution_status=row["execution_status"],
+        execution_error=row["execution_error"],
+        executed_by=row["executed_by"],
+        executed_at=_optional_iso8601(row["executed_at"]),
+    )
+
+
+def approver_from_row(row: Mapping[str, Any]) -> Approver:
+    """Build an :class:`Approver` from a database row.
+
+    The stored credential is not read: it is not part of the record.
+    """
+    return Approver(
+        id=str(row["id"]),
+        display_name=row["display_name"],
+        role=row["role"],
+        active=bool(row["active"]),
+        created_at=to_iso8601(row["created_at"]),
+    )
+
+
+def audit_event_from_row(row: Mapping[str, Any]) -> AuditEvent:
+    """Build an :class:`AuditEvent` from a database row."""
+    session_id = row["session_id"]
+    action_id = row["action_id"]
+    return AuditEvent(
+        id=int(row["id"]),
+        event_id=str(row["event_id"]),
+        correlation_id=str(row["correlation_id"]),
+        session_id=str(session_id) if session_id is not None else None,
+        ticket_id=row["ticket_id"],
+        actor_type=row["actor_type"],
+        actor_id=row["actor_id"],
+        action=row["action"],
+        target=row["target"],
+        decision=row["decision"],
+        outcome=row["outcome"],
+        payload=row["payload"],
+        action_id=str(action_id) if action_id is not None else None,
         created_at=to_iso8601(row["created_at"]),
     )

@@ -175,11 +175,35 @@ ALTER TABLE memories
 CREATE INDEX ix_memories_search ON memories USING GIN (search_vector);
 """
 
+# ---------------------------------------------------------------------------
+# Migration 3: link audit events to the action they describe
+# ---------------------------------------------------------------------------
+#
+# An audit event names the action it belongs to, so that the history of an
+# action can be found, and so that an event cannot be attached to an action
+# that does not exist.
+#
+# The reference is restrictive rather than cascading: the audit table is
+# append-only, and clearing the reference of an event would be an update of
+# an audit row, which the trigger of the table refuses. An action that has
+# audit events therefore cannot be deleted, and its history stays complete
+# and untouched. An action without events can be deleted as usual.
+#
+# The append-only trigger of the table is left alone: an event still cannot
+# be changed or removed.
+MIGRATION_3 = """
+ALTER TABLE audit_events
+    ADD COLUMN action_id UUID REFERENCES actions(id) ON DELETE RESTRICT;
+
+CREATE INDEX ix_audit_events_action_id ON audit_events (action_id);
+"""
+
 # Ordered list of (version, name, sql) triples. Never edit an applied
 # migration; append a new numbered entry instead.
 MIGRATIONS: list[tuple[int, str, str]] = [
     (1, "initial_schema", MIGRATION_1),
     (2, "memory_full_text_search", MIGRATION_2),
+    (3, "action_audit_link", MIGRATION_3),
 ]
 
 #: Arbitrary key for the advisory lock that serializes migration runs.
