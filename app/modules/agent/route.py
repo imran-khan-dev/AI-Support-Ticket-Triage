@@ -14,6 +14,7 @@ from app.modules.agent.service import (
     SessionNotFoundError,
     StorageError,
     load_session_history,
+    load_session_memory,
     persist_agent_run,
     prepare_session_store,
     resolve_session_id,
@@ -63,6 +64,14 @@ async def resolve_ticket_endpoint(
     never separated from its output. The message of the current run is not
     part of the history and is sent exactly once.
 
+    The run also receives the memories of its session that are relevant to
+    the message. They are recalled after the session is resolved, bounded by
+    ``AGENT_MAX_MEMORY_ITEMS`` and ``AGENT_MAX_MEMORY_CHARS``, and placed in
+    front of the conversation as one labelled item. Recalling them is
+    best-effort: a storage failure is logged and the run continues without
+    them, because the answer matters more than the recall. The memories are
+    not part of the stored transcript.
+
     The session id is returned in the ``X-Session-Id`` header as well as in
     the response body, so that a client can recover it even when the run ends
     in an error response. The ``X-Transcript-Stored`` header reports whether
@@ -108,6 +117,19 @@ async def resolve_ticket_endpoint(
             status_code=503,
             detail="Session storage is temporarily unavailable.",
         )
+
+    # The memories are recalled after the session is known, and they are
+    # placed in front of the conversation. Recalling them is best-effort: a
+    # failure is logged and the run continues without them, because the
+    # answer is the primary result of the request.
+    memory_items = load_session_memory(
+        database,
+        session_id,
+        request.message,
+        max_items=settings.agent_max_memory_items,
+        max_chars=settings.agent_max_memory_chars,
+    )
+    history = [*memory_items, *history]
 
     # The session id is published as a header before the run starts, so that
     # it survives an error response whose body must stay unchanged.

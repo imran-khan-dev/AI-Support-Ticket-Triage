@@ -23,8 +23,13 @@ from typing import Any, Iterable
 import psycopg
 
 from app.agent_core.agent import AgentResult
-from app.core.config import DEFAULT_MAX_HISTORY_MESSAGES
+from app.core.config import (
+    DEFAULT_MAX_HISTORY_MESSAGES,
+    DEFAULT_MAX_MEMORY_CHARS,
+    DEFAULT_MAX_MEMORY_ITEMS,
+)
 from app.modules.agent.history import load_history_items
+from app.modules.agent.memory import build_memory_items
 from app.persistence.db import Database
 from app.persistence.models import (
     ROLE_ASSISTANT,
@@ -137,6 +142,39 @@ def load_session_history(
         )
     except psycopg.Error as exc:
         raise StorageError("The session store is unavailable.") from exc
+
+
+def load_session_memory(
+    db: Database,
+    session_id: str,
+    message: str,
+    *,
+    max_items: int = DEFAULT_MAX_MEMORY_ITEMS,
+    max_chars: int = DEFAULT_MAX_MEMORY_CHARS,
+) -> list[dict[str, Any]]:
+    """Return the memory context of a run as provider input items.
+
+    Recalling a memory is best-effort. The support answer is the primary
+    result of a request, so a storage failure is logged and the run
+    continues without memory context instead of failing the request.
+
+    Only storage errors are caught. A connection failure, a failed query,
+    and an exhausted connection pool are all reported by PostgreSQL as a
+    ``psycopg.Error``; a programming error is not hidden.
+    """
+    try:
+        return build_memory_items(
+            db,
+            session_id,
+            message,
+            max_items=max_items,
+            max_chars=max_chars,
+        )
+    except psycopg.Error:
+        logger.exception(
+            "Failed to recall the memories of session %s", session_id
+        )
+        return []
 
 
 def build_transcript(message: str, result: AgentResult) -> list[MessageDraft]:

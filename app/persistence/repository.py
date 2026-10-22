@@ -11,6 +11,7 @@ appends to the same session can never reserve the same number.
 
 from __future__ import annotations
 
+import re
 import uuid
 from datetime import datetime, timezone
 from typing import Sequence
@@ -41,6 +42,10 @@ MEMORY_CONTENT_MAX_CHARS = 1000
 
 #: Default number of memories a search returns.
 MEMORY_SEARCH_RESULT_LIMIT = 10
+
+#: The words of a search query. The query text is split into these before it
+#: is turned into a tsquery.
+_SEARCH_TERM = re.compile(r"[0-9A-Za-z]+")
 
 
 def _canonical_session_id(session_id: str) -> str | None:
@@ -315,6 +320,19 @@ def append_memories(
     return stored
 
 
+def _search_query(text: str) -> str:
+    """Return a tsquery that matches a memory holding any of the terms.
+
+    The terms are quoted, so that a word of the message that PostgreSQL
+    treats as an operator cannot change the meaning of the query. Stop words
+    are dropped by PostgreSQL itself.
+    """
+    terms = _SEARCH_TERM.findall(text)
+    if not terms:
+        return ""
+    return " | ".join(f"'{term}'" for term in terms)
+
+
 def search_memories(
     db: Database,
     session_id: str,
@@ -345,6 +363,9 @@ def search_memories(
     text = (query or "").strip()
     if not text:
         return []
+    tsquery = _search_query(text)
+    if not tsquery:
+        return []
 
     with db.connection() as conn:
         rows = conn.execute(
@@ -352,11 +373,11 @@ def search_memories(
             " source_msg_id, created_at"
             " FROM memories"
             " WHERE session_id = %s"
-            " AND search_vector @@ websearch_to_tsquery('english', %s)"
+            " AND search_vector @@ to_tsquery('english', %s)"
             " ORDER BY ts_rank("
-            "   search_vector, websearch_to_tsquery('english', %s)"
+            "   search_vector, to_tsquery('english', %s)"
             " ) DESC, created_at DESC, id DESC"
             " LIMIT %s",
-            (content_limit, canonical, text, text, limit),
+            (content_limit, canonical, tsquery, tsquery, limit),
         ).fetchall()
     return [memory_from_row(row) for row in rows]

@@ -330,6 +330,46 @@ def test_search_orders_its_results_deterministically(database):
     )
 
 
+def test_a_memory_matches_when_the_query_holds_one_of_its_terms(database):
+    """The terms of a query are matched one by one, not all at once."""
+    session = create_session(database)
+    append_memories(
+        database,
+        session.id,
+        [
+            MemoryDraft(
+                kind=MEMORY_KIND_FACT,
+                content="Refunds are issued within five business days.",
+            )
+        ],
+    )
+
+    found = search_memories(database, session.id, "I need a refund")
+
+    assert [memory.content for memory in found] == [
+        "Refunds are issued within five business days."
+    ]
+
+
+def test_a_query_word_that_looks_like_an_operator_is_harmless(database):
+    """A word of the message cannot change the meaning of the query."""
+    session = create_session(database)
+    append_memories(
+        database,
+        session.id,
+        [
+            MemoryDraft(
+                kind=MEMORY_KIND_FACT,
+                content="Refunds are issued within five business days.",
+            )
+        ],
+    )
+
+    found = search_memories(database, session.id, "refund or not refund")
+
+    assert len(found) == 1
+
+
 def test_an_empty_query_returns_nothing(database):
     """A search without a term matches nothing."""
     session = create_session(database)
