@@ -30,6 +30,7 @@ from app.core.config import (
 )
 from app.modules.agent.history import load_history_items
 from app.modules.agent.memory import build_memory_items
+from app.modules.agent.memory_writer import build_memory_drafts
 from app.persistence.db import Database
 from app.persistence.models import (
     ROLE_ASSISTANT,
@@ -40,8 +41,10 @@ from app.persistence.models import (
     MessageDraft,
 )
 from app.persistence.repository import (
+    append_memories,
     append_messages,
     create_session,
+    find_memory_by_content,
     get_session,
 )
 
@@ -259,3 +262,57 @@ def persist_agent_run(
         )
         return False
     return True
+
+
+def store_run_memory(
+    db: Database,
+    session_id: str,
+    result: AgentResult,
+    source_msg_id: int | None = None,
+) -> bool:
+    """Store the memory of a finished agent run.
+
+    The drafts are built by the memory writer, which decides what is worth
+    remembering: only a successful run produces a draft, and only the
+    answer of the agent becomes part of it.
+
+    A draft that the session already holds word for word is not stored
+    again. The content of a draft is shorter than the cap of the store, so
+    the content that is checked is the content that is written.
+
+    The duplicate check is a read that is followed by a write, and the two
+    are not one atomic step. Two concurrent runs of the same session can
+    therefore still store the same content twice: the table has no unique
+    constraint that could rule this out, and the check is best-effort.
+
+    Returns ``True`` when a new memory was stored. A run that produced no
+    draft and a duplicate that was skipped both return ``False``.
+
+    A storage failure is logged rather than raised: a memory that cannot be
+    stored must never discard the agent's answer, which is the primary
+    result of the request.
+    """
+    drafts = build_memory_drafts(result, source_msg_id)
+    if not drafts:
+        return False
+
+    stored = False
+    for draft in drafts:
+        try:
+            existing = find_memory_by_content(db, session_id, draft.content)
+            if existing is not None:
+                logger.info(
+                    "Skipped a duplicate memory in session %s", session_id
+                )
+                continue
+            append_memories(db, session_id, [draft])
+        except Exception:
+            # Deliberately broad, like the transcript write: losing a
+            # memory must never discard the answer, which is the primary
+            # result of the request.
+            logger.exception(
+                "Failed to store the memory of session %s", session_id
+            )
+            continue
+        stored = True
+    return stored

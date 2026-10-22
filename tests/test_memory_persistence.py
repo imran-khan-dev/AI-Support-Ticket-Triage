@@ -19,6 +19,7 @@ from app.persistence import (
     append_memories,
     append_messages,
     create_session,
+    find_memory_by_content,
     search_memories,
 )
 from app.persistence.migrations import MIGRATIONS, current_version
@@ -443,3 +444,149 @@ def test_the_source_message_is_preserved_and_cleared_when_it_is_deleted(database
     found = search_memories(database, session.id, "summary")
     assert len(found) == 1
     assert found[0].source_msg_id is None
+
+
+# ---------------------------------------------------------------------------
+# Exact-match lookup
+# ---------------------------------------------------------------------------
+
+
+def test_an_exact_match_returns_the_stored_memory(database):
+    """The memory that holds exactly this content is found."""
+    session = create_session(database)
+    stored = append_memories(
+        database,
+        session.id,
+        [
+            MemoryDraft(
+                kind=MEMORY_KIND_SUMMARY,
+                content="Refunds are issued within five business days.",
+            )
+        ],
+    )
+
+    found = find_memory_by_content(
+        database,
+        session.id,
+        "Refunds are issued within five business days.",
+    )
+
+    assert found is not None
+    assert found.id == stored[0].id
+    assert found.session_id == session.id
+    assert found.kind == MEMORY_KIND_SUMMARY
+    assert found.content == "Refunds are issued within five business days."
+    assert found.source_msg_id is None
+
+
+def test_a_different_content_is_not_found(database):
+    """The lookup matches the content character for character."""
+    session = create_session(database)
+    append_memories(
+        database,
+        session.id,
+        [
+            MemoryDraft(
+                kind=MEMORY_KIND_FACT,
+                content="Refunds are issued within five business days.",
+            )
+        ],
+    )
+
+    assert (
+        find_memory_by_content(
+            database, session.id, "Refunds are issued within five business day"
+        )
+        is None
+    )
+    assert (
+        find_memory_by_content(
+            database, session.id, "refunds are issued within five business days."
+        )
+        is None
+    )
+    assert (
+        find_memory_by_content(
+            database,
+            session.id,
+            "Refunds are issued within five business days. ",
+        )
+        is None
+    )
+    assert find_memory_by_content(database, session.id, "") is None
+
+
+def test_a_memory_of_another_session_is_not_found(database):
+    """The lookup only ever finds a memory of the given session."""
+    first = create_session(database)
+    second = create_session(database)
+    append_memories(
+        database,
+        first.id,
+        [
+            MemoryDraft(
+                kind=MEMORY_KIND_SUMMARY,
+                content="Refunds are issued within five business days.",
+            )
+        ],
+    )
+
+    assert (
+        find_memory_by_content(
+            database,
+            second.id,
+            "Refunds are issued within five business days.",
+        )
+        is None
+    )
+    assert (
+        find_memory_by_content(
+            database,
+            first.id,
+            "Refunds are issued within five business days.",
+        )
+        is not None
+    )
+
+
+def test_a_repeated_content_does_not_produce_a_false_match(database):
+    """The same content stored twice is still found, and nothing else is."""
+    session = create_session(database)
+    stored = append_memories(
+        database,
+        session.id,
+        [
+            MemoryDraft(
+                kind=MEMORY_KIND_SUMMARY,
+                content="Refunds are issued within five business days.",
+            )
+        ],
+    )
+    append_memories(
+        database,
+        session.id,
+        [
+            MemoryDraft(
+                kind=MEMORY_KIND_SUMMARY,
+                content="Refunds are issued within five business days.",
+            )
+        ],
+    )
+
+    found = find_memory_by_content(
+        database,
+        session.id,
+        "Refunds are issued within five business days.",
+    )
+
+    assert found is not None
+    assert found.id == stored[0].id
+
+    # A part of the content is not the content.
+    assert find_memory_by_content(database, session.id, "Refunds") is None
+    assert (
+        find_memory_by_content(
+            database, session.id, "Refunds are issued within five business"
+        )
+        is None
+    )

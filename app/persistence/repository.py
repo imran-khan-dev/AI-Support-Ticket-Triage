@@ -320,6 +320,41 @@ def append_memories(
     return stored
 
 
+def find_memory_by_content(
+    db: Database,
+    session_id: str,
+    content: str,
+) -> Memory | None:
+    """Return the memory of a session that holds exactly this content.
+
+    The session id and the content have to match the stored row character
+    for character. A full-text search is not used for this: it matches on
+    words, and would report a memory that only shares a term with the
+    content.
+
+    The oldest matching memory is returned, so that the result does not
+    depend on the order the rows were written in.
+    """
+    canonical = _canonical_session_id(session_id)
+    if canonical is None:
+        return None
+    text = content or ""
+    if not text:
+        return None
+
+    with db.connection() as conn:
+        row = conn.execute(
+            "SELECT id, session_id, kind, content, source_msg_id, created_at"
+            " FROM memories WHERE session_id = %s AND content = %s"
+            " ORDER BY id LIMIT 1",
+            (canonical, text),
+        ).fetchone()
+
+    if row is None:
+        return None
+    return memory_from_row(row)
+
+
 def _search_query(text: str) -> str:
     """Return a tsquery that matches a memory holding any of the terms.
 
