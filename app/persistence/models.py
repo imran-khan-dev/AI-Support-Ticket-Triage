@@ -23,6 +23,21 @@ SESSION_STATUS_OPEN = "open"
 SESSION_STATUS_CLOSED = "closed"
 
 
+#: Kinds a stored memory can have. The database enforces the same set.
+MEMORY_KIND_SUMMARY = "summary"
+MEMORY_KIND_FACT = "fact"
+MEMORY_KIND_PREFERENCE = "preference"
+MEMORY_KIND_OUTCOME = "outcome"
+
+#: Every kind a memory may have.
+MEMORY_KINDS = (
+    MEMORY_KIND_SUMMARY,
+    MEMORY_KIND_FACT,
+    MEMORY_KIND_PREFERENCE,
+    MEMORY_KIND_OUTCOME,
+)
+
+
 @dataclass(frozen=True)
 class Session:
     """A conversation session."""
@@ -58,6 +73,32 @@ class MessageDraft:
     content: str
     call_id: str | None = None
     tool_name: str | None = None
+
+
+@dataclass(frozen=True)
+class Memory:
+    """A derived, long-term memory of a session.
+
+    A memory is not authoritative: it is a distilled fact about a session,
+    kept so that it can be found again later. It belongs to exactly one
+    session.
+    """
+
+    id: int
+    session_id: str
+    kind: str
+    content: str
+    source_msg_id: int | None
+    created_at: str
+
+
+@dataclass(frozen=True)
+class MemoryDraft:
+    """A memory that has not been written yet."""
+
+    kind: str
+    content: str
+    source_msg_id: int | None = None
 
 
 def to_iso8601(value: Any) -> str:
@@ -101,6 +142,21 @@ def message_from_row(row: Mapping[str, Any]) -> Message:
         tool_name=row["tool_name"],
         correlation_id=(
             str(correlation_id) if correlation_id is not None else None
+        ),
+        created_at=to_iso8601(row["created_at"]),
+    )
+
+
+def memory_from_row(row: Mapping[str, Any]) -> Memory:
+    """Build a :class:`Memory` from a database row."""
+    source_msg_id = row["source_msg_id"]
+    return Memory(
+        id=int(row["id"]),
+        session_id=str(row["session_id"]),
+        kind=row["kind"],
+        content=row["content"],
+        source_msg_id=(
+            int(source_msg_id) if source_msg_id is not None else None
         ),
         created_at=to_iso8601(row["created_at"]),
     )

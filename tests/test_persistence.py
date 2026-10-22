@@ -62,9 +62,9 @@ def test_initialization_creates_every_table(database):
 def test_migrations_record_the_schema_version(database):
     """The schema version is stored in the database."""
     with database.connection() as conn:
-        assert current_version(conn) == 1
+        assert current_version(conn) == 2
     assert current_version.__module__.endswith("migrations")
-    assert MIGRATIONS[-1][0] == 1
+    assert MIGRATIONS[-1][0] == 2
 
 
 def test_migrations_are_idempotent(database, clean_database):

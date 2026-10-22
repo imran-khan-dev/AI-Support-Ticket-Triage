@@ -1,4 +1,4 @@
-"""Data access for sessions and messages.
+"""Data access for sessions, messages, and memories.
 
 This layer knows about storage only. It has no knowledge of the agent, the
 provider, or the HTTP layer, so it can be tested on its own.
@@ -19,9 +19,12 @@ from app.persistence.db import Database
 from app.persistence.models import (
     SESSION_STATUS_CLOSED,
     SESSION_STATUS_OPEN,
+    Memory,
+    MemoryDraft,
     Message,
     MessageDraft,
     Session,
+    memory_from_row,
     message_from_row,
     session_from_row,
 )
@@ -29,6 +32,15 @@ from app.persistence.models import (
 
 class UnknownSessionError(LookupError):
     """Raised when a write targets a session that does not exist."""
+
+
+#: Maximum number of characters a stored memory may hold. A memory is a
+#: distilled fact, not a transcript, so the content is capped when it is
+#: stored. A memory can therefore never flood a prompt.
+MEMORY_CONTENT_MAX_CHARS = 1000
+
+#: Default number of memories a search returns.
+MEMORY_SEARCH_RESULT_LIMIT = 10
 
 
 def _canonical_session_id(session_id: str) -> str | None:
@@ -249,3 +261,102 @@ def count_messages(db: Database, session_id: str) -> int:
             (canonical,),
         ).fetchone()
     return int(row["count"]) if row is not None else 0
+
+
+def append_memories(
+    db: Database,
+    session_id: str,
+    drafts: Sequence[MemoryDraft],
+) -> list[Memory]:
+    """Store memory drafts for a session and return the stored rows.
+
+    The memories belong to exactly one session, and the session has to
+    exist. The kind of a draft is not checked here: the database constraint
+    rejects a kind that is not one of the supported ones.
+
+    The content of a draft is truncated to
+    :data:`MEMORY_CONTENT_MAX_CHARS` characters, so that a memory stays a
+    short, distilled fact.
+    """
+    if not drafts:
+        return []
+    canonical = _canonical_session_id(session_id)
+    if canonical is None:
+        raise UnknownSessionError(session_id)
+
+    now = utc_now()
+    stored: list[Memory] = []
+    with db.write_transaction() as conn:
+        session = conn.execute(
+            "SELECT id FROM sessions WHERE id = %s",
+            (canonical,),
+        ).fetchone()
+        if session is None:
+            raise UnknownSessionError(session_id)
+
+        for draft in drafts:
+            content = (draft.content or "")[:MEMORY_CONTENT_MAX_CHARS]
+            row = conn.execute(
+                "INSERT INTO memories"
+                " (session_id, kind, content, source_msg_id, created_at)"
+                " VALUES (%s, %s, %s, %s, %s)"
+                " RETURNING id, session_id, kind, content, source_msg_id,"
+                " created_at",
+                (
+                    canonical,
+                    draft.kind,
+                    content,
+                    draft.source_msg_id,
+                    now,
+                ),
+            ).fetchone()
+            stored.append(memory_from_row(row))
+
+    return stored
+
+
+def search_memories(
+    db: Database,
+    session_id: str,
+    query: str,
+    *,
+    limit: int = MEMORY_SEARCH_RESULT_LIMIT,
+    content_limit: int = MEMORY_CONTENT_MAX_CHARS,
+) -> list[Memory]:
+    """Return the memories of a session that match a query.
+
+    Only the memories of the given session are searched: the session id is
+    part of the query, so a session never sees the memories of another one.
+
+    The search uses the full-text search vector that the database keeps for
+    every memory. The query is matched with the English text search rules:
+    the terms are stemmed, and a memory matches when it holds any of them.
+    The results are ordered by relevance first and by recency second, so
+    that the order is the same for the same query every time.
+
+    The content of a result is truncated to ``content_limit`` characters,
+    because the results are meant to be read by a model.
+    """
+    canonical = _canonical_session_id(session_id)
+    if canonical is None:
+        return []
+    if limit <= 0:
+        return []
+    text = (query or "").strip()
+    if not text:
+        return []
+
+    with db.connection() as conn:
+        rows = conn.execute(
+            "SELECT id, session_id, kind, left(content, %s) AS content,"
+            " source_msg_id, created_at"
+            " FROM memories"
+            " WHERE session_id = %s"
+            " AND search_vector @@ websearch_to_tsquery('english', %s)"
+            " ORDER BY ts_rank("
+            "   search_vector, websearch_to_tsquery('english', %s)"
+            " ) DESC, created_at DESC, id DESC"
+            " LIMIT %s",
+            (content_limit, canonical, text, text, limit),
+        ).fetchall()
+    return [memory_from_row(row) for row in rows]

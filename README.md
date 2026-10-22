@@ -319,4 +319,4 @@ application data.
 - `confidence` is a model-estimated score between 0.0 and 1.0, not a calibrated probability of correctness or measured accuracy.
 - Classification quality depends on the model and system prompt and should be evaluated against real tickets before production use.
 - When no `GROQ_API_KEY` is configured, responses come from the deterministic mock service, not a live model.
-- Stored conversation history is replayed into a continuing run, bounded by `AGENT_MAX_HISTORY_MESSAGES`. The memory, approval, and audit tables are not written to yet; the schema exists so that those features can be built on it.
+- Stored conversation history is replayed into a continuing run, bounded by `AGENT_MAX_HISTORY_MESSAGES`. The memory storage and search layer exists (`app/persistence`: `append_memories`, `search_memories`), but the agent does not read or write memories yet. The approval and audit tables are not written to either; the schema exists so that those features can be built on it.

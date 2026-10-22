@@ -153,10 +153,33 @@ CREATE TRIGGER trg_audit_events_append_only
     FOR EACH ROW EXECUTE FUNCTION audit_events_append_only();
 """
 
+# ---------------------------------------------------------------------------
+# Migration 2: full-text search over memories
+# ---------------------------------------------------------------------------
+#
+# The memories table was created empty by Migration 1. It gains a generated
+# column that holds the search vector of its content, and a GIN index over
+# that column, so that the memories of a session can be searched with
+# PostgreSQL full-text search.
+#
+# The column is generated, so it is never written by the application: the
+# database keeps it in step with the content. The English text search
+# configuration is part of the generation expression, which makes it
+# immutable and therefore allowed in a generated column. Changing the
+# configuration later needs a new migration.
+MIGRATION_2 = """
+ALTER TABLE memories
+    ADD COLUMN search_vector tsvector
+    GENERATED ALWAYS AS (to_tsvector('english', content)) STORED;
+
+CREATE INDEX ix_memories_search ON memories USING GIN (search_vector);
+"""
+
 # Ordered list of (version, name, sql) triples. Never edit an applied
 # migration; append a new numbered entry instead.
 MIGRATIONS: list[tuple[int, str, str]] = [
     (1, "initial_schema", MIGRATION_1),
+    (2, "memory_full_text_search", MIGRATION_2),
 ]
 
 #: Arbitrary key for the advisory lock that serializes migration runs.
