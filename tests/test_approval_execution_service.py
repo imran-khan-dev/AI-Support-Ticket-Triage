@@ -5,8 +5,11 @@ import pytest
 from app.core.security import generate_approver_token
 from app.modules.approvals.service import register_approver
 from app.modules.approvals.decision_service import decide_approval
+import threading
+
 from app.modules.approvals.execution_service import (
     ActionExecutionError,
+    ActionExecutionUncertainError,
     execute_approved_action,
 )
 from app.agent_core import tools as tools_module
@@ -242,3 +245,93 @@ def test_audit_failure_rolls_back(database, monkeypatch):
     monkeypatch.setattr("app.persistence.repository._insert_audit_event", boom)
     with pytest.raises(RuntimeError):
         execute_approved_action(database, action_id=action.id)
+
+
+@pytest.mark.usefixtures("clean_database")
+def test_uncertain_outcome_preserves_claim(database, monkeypatch):
+    def fake(args):
+        return []
+
+    monkeypatch.setitem(
+        tools_module.TOOL_REGISTRY,
+        "search_support_docs",
+        (tools_module.SearchSupportDocsArgs, fake),
+    )
+    monkeypatch.setattr(
+        "app.modules.approvals.execution_service.TOOL_REGISTRY",
+        tools_module.TOOL_REGISTRY,
+    )
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("audit failed")
+
+    approver, token = _register(database)
+    action = _create_action(database)
+    decide_approval(
+        database,
+        action_id=action.id,
+        decision="approved",
+        approver_token=token,
+        secret=TEST_SECRET,
+    )
+
+    monkeypatch.setattr("app.persistence.repository._insert_audit_event", boom)
+
+    with pytest.raises(ActionExecutionUncertainError):
+        execute_approved_action(database, action_id=action.id)
+
+    claimed = get_action(database, action.id)
+    assert claimed.state == "approved"
+    assert claimed.executed_by is not None
+
+    with pytest.raises(ActionExecutionError):
+        execute_approved_action(database, action_id=action.id)
+
+
+@pytest.mark.usefixtures("clean_database")
+def test_concurrent_claim_only_one_acquires(database, monkeypatch):
+    import time
+
+    started = threading.Barrier(2)
+    results = []
+
+    def slow(args):
+        time.sleep(0.2)
+        return []
+
+    monkeypatch.setitem(
+        tools_module.TOOL_REGISTRY,
+        "search_support_docs",
+        (tools_module.SearchSupportDocsArgs, slow),
+    )
+    monkeypatch.setattr(
+        "app.modules.approvals.execution_service.TOOL_REGISTRY",
+        tools_module.TOOL_REGISTRY,
+    )
+
+    approver, token = _register(database)
+    action = _create_action(database)
+    decide_approval(
+        database,
+        action_id=action.id,
+        decision="approved",
+        approver_token=token,
+        secret=TEST_SECRET,
+    )
+
+    def worker():
+        started.wait()
+        try:
+            r = execute_approved_action(database, action_id=action.id)
+            results.append(("ok", r.executed))
+        except Exception as exc:
+            results.append(("err", type(exc).__name__))
+
+    threads = [threading.Thread(target=worker) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    successes = [r for r in results if r[0] == "ok" and r[1] is True]
+    assert len(successes) == 1

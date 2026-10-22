@@ -2,6 +2,9 @@
 
 The service uses the persisted action only. It never accepts replacement
 arguments or caller-supplied tool implementations.
+
+Crash recovery for abandoned claims is not implemented: an action whose
+claim is left set after a process crash may require manual intervention.
 """
 
 from __future__ import annotations
@@ -34,8 +37,8 @@ class ActionExecutionError(RuntimeError):
     """Raised when an action cannot be executed safely."""
 
 
-class ActionExecutionUnauthorizedError(ActionExecutionError):
-    """Raised when an approver is not authenticated or authorized."""
+class ActionExecutionUncertainError(ActionExecutionError):
+    """Raised when a side effect may have occurred but could not be recorded."""
 
 
 @dataclass(frozen=True)
@@ -152,13 +155,15 @@ def execute_approved_action(
             executed_by=executed_by,
             draft=audit_draft,
         )
-    except Exception:
-        release_action_execution_claim(db, claimed.id)
-        raise
+    except Exception as exc:
+        raise ActionExecutionUncertainError(
+            "The tool may have succeeded, but the execution result could not be recorded."
+        ) from exc
 
     if not transition.changed or transition.action is None:
-        release_action_execution_claim(db, claimed.id)
-        raise ActionExecutionError("The execution could not be recorded.")
+        raise ActionExecutionUncertainError(
+            "The tool may have succeeded, but the execution result could not be recorded."
+        )
 
     return ActionExecutionResult(
         action=transition.action,
