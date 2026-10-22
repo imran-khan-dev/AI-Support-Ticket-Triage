@@ -7,6 +7,13 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 #: messages that are actually sent can be smaller than this limit.
 DEFAULT_MAX_HISTORY_MESSAGES = 20
 
+#: Default number of stored memories that are recalled into a run.
+DEFAULT_MAX_MEMORY_ITEMS = 3
+
+#: Default maximum number of characters of recalled memory that are injected
+#: into a run, the label of the context included.
+DEFAULT_MAX_MEMORY_CHARS = 1200
+
 
 class Settings(BaseSettings):
     """Application settings."""
@@ -44,4 +51,21 @@ class Settings(BaseSettings):
         "AGENT_MAX_HISTORY_MESSAGES environment variable. A tool call and "
         "its output are always replayed together, so the effective history "
         "can be shorter than this limit. Zero disables history replay.",
+    )
+
+    agent_max_memory_items: int = Field(
+        default=DEFAULT_MAX_MEMORY_ITEMS,
+        ge=0,
+        description="Maximum number of stored memories that are recalled into "
+        "a run. Read from the AGENT_MAX_MEMORY_ITEMS environment variable. "
+        "Zero disables the recall.",
+    )
+
+    agent_max_memory_chars: int = Field(
+        default=DEFAULT_MAX_MEMORY_CHARS,
+        ge=0,
+        description="Maximum number of characters of recalled memory that are "
+        "injected into a run, the label of the context included. Read from "
+        "the AGENT_MAX_MEMORY_CHARS environment variable. Zero disables the "
+        "recall.",
     )
