@@ -15,8 +15,8 @@ from app.modules.approvals.service import (
     ApproverConfigurationError,
     authenticate_approver,
 )
-from app.persistence.db import Database
-from app.persistence.models import (
+from app.database.db import Database
+from app.database.models import (
     ACTION_DECISION_STATES,
     ACTION_STATE_PENDING,
     ACTION_STATE_APPROVED,
@@ -26,7 +26,7 @@ from app.persistence.models import (
     ActionTransition,
     Approver,
 )
-from app.persistence.repository import (
+from app.database.repository import (
     ActionConflictError,
     decide_action_with_audit,
     get_action,

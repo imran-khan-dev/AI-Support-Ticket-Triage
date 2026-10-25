@@ -13,7 +13,7 @@ from app.modules.approvals.execution_service import (
     execute_approved_action,
 )
 from app.agent_core import tools as tools_module
-from app.persistence import create_action, get_action
+from app.database import create_action, get_action
 
 TEST_SECRET = "test-only-secret-for-approver-credentials-0123456789"
 CORRELATION_ID = "11111111-1111-4111-8111-111111111111"

@@ -16,15 +16,15 @@ from typing import Any
 from app.agent_core.tools import GATED_TOOLS, TOOL_REGISTRY
 from app.modules.approvals.policy import CAPABILITY_DECIDE_ACTION, is_authorized
 from app.modules.approvals.service import authenticate_approver
-from app.persistence.db import Database
-from app.persistence.models import (
+from app.database.db import Database
+from app.database.models import (
     ACTION_STATE_APPROVED,
     ACTION_STATE_EXECUTED,
     AuditDraft,
     Action,
     AuditEvent,
 )
-from app.persistence.repository import (
+from app.database.repository import (
     ActionConflictError,
     claim_action_for_execution,
     get_action,

@@ -12,7 +12,7 @@ import pytest
 
 from app.agent_core.agent import AgentResult
 from app.modules.agent.service import store_run_memory
-from app.persistence import (
+from app.database import (
     MEMORY_KIND_SUMMARY,
     MessageDraft,
     append_messages,

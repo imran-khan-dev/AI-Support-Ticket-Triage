@@ -39,7 +39,7 @@ import psycopg
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
 
-from app.persistence.migrations import apply_migrations
+from app.database.migrations import apply_migrations
 
 logger = logging.getLogger("persistence.db")
 
@@ -208,6 +208,7 @@ class Database:
         max_size: int = DEFAULT_POOL_MAX_SIZE,
         timeout: float = DEFAULT_POOL_TIMEOUT,
     ) -> None:
+        
         self._url = resolve_database_url(url)
         self._pool = _acquire_pool(self._url, min_size, max_size, timeout)
         self._closed = False

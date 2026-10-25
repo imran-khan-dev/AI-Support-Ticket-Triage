@@ -31,14 +31,14 @@ import json
 from typing import Any, Iterable, Sequence
 
 from app.core.config import DEFAULT_MAX_HISTORY_MESSAGES
-from app.persistence.db import Database
-from app.persistence.models import (
+from app.database.db import Database
+from app.database.models import (
     ROLE_ASSISTANT,
     ROLE_TOOL,
     ROLE_USER,
     Message,
 )
-from app.persistence.repository import list_messages
+from app.database.repository import list_messages
 
 
 def _user_item(message: Message) -> dict[str, Any]:

@@ -24,8 +24,8 @@ from fastapi.testclient import TestClient
 
 from app.agent_core.agent import run_agent
 from app.core.config import DEFAULT_MAX_HISTORY_MESSAGES, Settings
-from app.modules.agent.history import load_history_items
-from app.persistence import (
+from app.domain.agent.history import load_history_items
+from app.database import (
     MessageDraft,
     append_messages,
     create_session,

@@ -12,7 +12,7 @@ from app.core.config import (
     DEFAULT_MAX_MEMORY_ITEMS,
     Settings,
 )
-from app.modules.agent.memory import (
+from app.domain.agent.memory import (
     CONTEXT_HEADER,
     MEMORY_CONTENT_MAX_CHARS,
     MEMORY_CONTEXT_ITEM_ID,
@@ -21,7 +21,7 @@ from app.modules.agent.memory import (
     build_memory_items,
     format_memory_context,
 )
-from app.persistence.models import Memory
+from app.database.models import Memory
 
 
 #: The session the fake memories belong to.

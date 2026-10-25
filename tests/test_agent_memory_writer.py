@@ -5,11 +5,11 @@ writes nothing. These tests therefore need no database and no provider.
 """
 
 from app.agent_core.agent import AgentResult
-from app.modules.agent.memory_writer import (
+from app.domain.agent.memory_writer import (
     MEMORY_WRITE_MAX_CHARS,
     build_memory_drafts,
 )
-from app.persistence.models import MEMORY_KIND_FACT, MEMORY_KIND_SUMMARY
+from app.database.models import MEMORY_KIND_FACT, MEMORY_KIND_SUMMARY
 
 
 #: The id of the stored assistant message a memory points back to.

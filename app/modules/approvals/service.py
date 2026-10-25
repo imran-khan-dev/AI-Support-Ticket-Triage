@@ -23,10 +23,10 @@ from app.core.security import (
     validate_secret,
     validate_token,
 )
-from app.persistence.db import Database
-from app.persistence.models import Approver
-from app.persistence.repository import create_approver, get_approver_by_token_hash
-from app.persistence.repository import set_approver_active as update_approver_active
+from app.database.db import Database
+from app.database.models import Approver
+from app.database.repository import create_approver, get_approver_by_token_hash
+from app.database.repository import set_approver_active as update_approver_active
 
 
 class ApproverError(RuntimeError):

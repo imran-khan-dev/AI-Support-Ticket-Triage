@@ -24,9 +24,9 @@ import re
 from typing import Any, Sequence
 
 from app.core.config import DEFAULT_MAX_MEMORY_CHARS, DEFAULT_MAX_MEMORY_ITEMS
-from app.persistence.db import Database
-from app.persistence.models import Memory
-from app.persistence.repository import search_memories
+from app.database.db import Database
+from app.database.models import Memory
+from app.database.repository import search_memories
 
 
 #: Maximum number of characters of the current message that are used as the

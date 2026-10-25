@@ -7,7 +7,7 @@ emptied before the test starts, so the suite never touches application data.
 import pytest
 from psycopg import errors
 
-from app.persistence import (
+from app.database import (
     MEMORY_CONTENT_MAX_CHARS,
     MEMORY_KIND_FACT,
     MEMORY_KIND_OUTCOME,
@@ -22,7 +22,7 @@ from app.persistence import (
     find_memory_by_content,
     search_memories,
 )
-from app.persistence.migrations import MIGRATIONS, current_version
+from app.database.migrations import MIGRATIONS, current_version
 
 
 #: Every test in this module writes to the database.

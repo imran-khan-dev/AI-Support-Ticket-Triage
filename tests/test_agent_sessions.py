@@ -16,7 +16,7 @@ from fastapi.testclient import TestClient
 
 from app.agent_core.agent import AgentResult
 from app.core.config import Settings
-from app.persistence import (
+from app.database import (
     MessageDraft,
     append_messages,
     create_session,

@@ -18,7 +18,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.agent_core.agent import AgentResult
-from app.persistence import (
+from app.database import (
     MessageDraft,
     append_messages,
     close_session,

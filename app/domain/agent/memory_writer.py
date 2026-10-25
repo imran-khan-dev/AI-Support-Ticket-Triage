@@ -31,9 +31,9 @@ model, and it knows nothing about the HTTP layer. It only returns drafts.
 from __future__ import annotations
 
 from app.agent_core.agent import AgentResult
-from app.modules.agent.memory import MEMORY_MIN_CONTENT_CHARS
-from app.modules.agent.memory import _clean_text as _normalize_text
-from app.persistence.models import MEMORY_KIND_SUMMARY, MemoryDraft
+from app.domain.agent.memory import MEMORY_MIN_CONTENT_CHARS
+from app.domain.agent.memory import _clean_text as _normalize_text
+from app.database.models import MEMORY_KIND_SUMMARY, MemoryDraft
 
 
 #: Maximum number of characters of the answer that are stored. A memory is

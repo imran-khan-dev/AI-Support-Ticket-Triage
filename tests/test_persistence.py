@@ -11,7 +11,7 @@ import pytest
 from psycopg import errors
 
 from app.core.config import Settings
-from app.persistence import (
+from app.database import (
     Database,
     DatabaseConfigurationError,
     MessageDraft,
@@ -25,7 +25,7 @@ from app.persistence import (
     list_sessions,
     resolve_database_url,
 )
-from app.persistence.migrations import MIGRATIONS, current_version
+from app.database.migrations import MIGRATIONS, current_version
 
 EXPECTED_TABLES = {
     "sessions",

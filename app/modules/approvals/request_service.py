@@ -13,14 +13,14 @@ from dataclasses import dataclass
 from typing import Any, Mapping
 
 from app.agent_core.tools import GATED_TOOLS, TOOL_REGISTRY
-from app.persistence.db import Database
-from app.persistence.models import (
+from app.database.db import Database
+from app.database.models import (
     ACTION_STATE_PENDING,
     AuditDraft,
     Action,
     AuditEvent,
 )
-from app.persistence.repository import (
+from app.database.repository import (
     ActionConflictError,
     create_action_with_audit,
     get_session,

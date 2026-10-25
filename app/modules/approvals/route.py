@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Header
 from app.core.config import Settings
-from app.persistence import get_database, DatabaseConfigurationError
+from app.database import get_database, DatabaseConfigurationError
 from app.modules.approvals.service import authenticate_approver
 from app.modules.approvals.policy import (
     is_authorized,
@@ -14,7 +14,7 @@ from app.modules.approvals.decision_service import (
     ApprovalDecisionUnauthorizedError,
 )
 from app.modules.approvals.execution_service import execute_approved_action, ActionExecutionError, ActionExecutionUncertainError
-from app.persistence.repository import list_actions, get_action
+from app.database.repository import list_actions, get_action
 from app.modules.approvals.schema import ActionResponse, DecisionRequest, ExecutionResponse
 
 from app.core.config import Settings

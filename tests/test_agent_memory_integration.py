@@ -16,7 +16,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.modules.agent.service import StorageError
-from app.persistence import (
+from app.database import (
     MemoryDraft,
     append_memories,
     create_session,

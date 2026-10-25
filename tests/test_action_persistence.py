@@ -15,7 +15,7 @@ import psycopg
 import pytest
 from psycopg import errors
 
-from app.persistence import (
+from app.database import (
     ACTION_STATE_APPROVED,
     ACTION_STATE_EXECUTED,
     ACTION_STATE_PENDING,

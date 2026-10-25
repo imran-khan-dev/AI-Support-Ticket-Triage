@@ -16,7 +16,7 @@ from app.modules.approvals.policy import (
     capabilities_of,
     is_authorized,
 )
-from app.persistence.models import (
+from app.database.models import (
     APPROVER_ROLE_ADMIN,
     APPROVER_ROLE_AGENT,
     APPROVER_ROLE_BILLING_ADMIN,
@@ -135,7 +135,7 @@ def test_the_role_is_read_from_the_stored_record():
 
 def test_every_role_of_the_schema_is_in_the_policy():
     """A role of the database is never left without an entry."""
-    from app.persistence.models import APPROVER_ROLES
+    from app.database.models import APPROVER_ROLES
 
     for role in APPROVER_ROLES:
         assert role in ROLE_CAPABILITIES

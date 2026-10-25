@@ -18,8 +18,8 @@ import uuid
 from datetime import datetime, timezone
 from typing import Sequence
 
-from app.persistence.db import Database
-from app.persistence.models import (
+from app.database.db import Database
+from app.database.models import (
     ACTION_DECISION_STATES,
     ACTION_STATE_APPROVED,
     ACTION_STATE_EXECUTED,

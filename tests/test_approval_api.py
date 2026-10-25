@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 
 from main import app
 from app.core.security import generate_approver_token
-from app.persistence import create_action, get_database
+from app.database import create_action, get_database
 from app.modules.approvals.service import register_approver
 
 TEST_SECRET = os.environ["APPROVER_TOKEN_SECRET"]
@@ -79,7 +79,7 @@ def test_execute_inactive_approver(client):
     token = generate_approver_token()
     db = get_database(os.environ["DATABASE_URL"])
     approver = register_approver(db, display_name="Sam", role="supervisor", token=token, secret=TEST_SECRET)
-    from app.persistence import set_approver_active
+    from app.database import set_approver_active
 
     set_approver_active(db, approver.id, False)
     action = create_action(

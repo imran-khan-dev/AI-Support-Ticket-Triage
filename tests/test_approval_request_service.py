@@ -8,7 +8,7 @@ from app.modules.approvals.request_service import (
     ApprovalRequestError,
     request_approval,
 )
-from app.persistence import AuditDraft, create_session
+from app.database import AuditDraft, create_session
 
 CORRELATION_ID = "11111111-1111-4111-8111-111111111111"
 

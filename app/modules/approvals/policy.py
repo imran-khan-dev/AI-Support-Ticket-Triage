@@ -22,7 +22,7 @@ The rules of the policy are:
 
 from __future__ import annotations
 
-from app.persistence.models import (
+from app.database.models import (
     APPROVER_ROLE_ADMIN,
     APPROVER_ROLE_AGENT,
     APPROVER_ROLE_BILLING_ADMIN,

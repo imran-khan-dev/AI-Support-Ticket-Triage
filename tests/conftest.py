@@ -83,7 +83,7 @@ def database():
     The session scope keeps one pool open for the whole run; the schema is
     applied once because the migration runner is idempotent.
     """
-    from app.persistence.db import close_pools, get_database
+    from app.database.db import close_pools, get_database
 
     db = get_database(TEST_DATABASE_URL)
     db.initialize()

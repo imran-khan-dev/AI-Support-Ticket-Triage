@@ -21,7 +21,7 @@ from app.modules.approvals.service import (
     register_approver,
     set_approver_active,
 )
-from app.persistence import (
+from app.database import (
     APPROVER_ROLE_ADMIN,
     APPROVER_ROLE_SUPERVISOR,
     get_approver,

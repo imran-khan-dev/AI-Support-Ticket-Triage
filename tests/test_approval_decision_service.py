@@ -9,7 +9,7 @@ from app.modules.approvals.decision_service import (
     ApprovalDecisionUnauthorizedError,
     decide_approval,
 )
-from app.persistence import (
+from app.database import (
     ACTION_STATE_APPROVED,
     ACTION_STATE_PENDING,
     ACTION_STATE_REJECTED,

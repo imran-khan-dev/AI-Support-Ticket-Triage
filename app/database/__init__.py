@@ -4,7 +4,7 @@ The package is built on PostgreSQL. It holds storage concerns only: the agent
 and HTTP layers live elsewhere.
 """
 
-from app.persistence.db import (
+from app.database.db import (
     DATABASE_URL_ENV,
     Database,
     DatabaseConfigurationError,
@@ -14,12 +14,12 @@ from app.persistence.db import (
     get_pool,
     resolve_database_url,
 )
-from app.persistence.migrations import (
+from app.database.migrations import (
     MIGRATIONS,
     apply_migrations,
     current_version,
 )
-from app.persistence.models import (
+from app.database.models import (
     ACTION_DECISION_STATES,
     ACTION_STATE_APPROVED,
     ACTION_STATE_EXECUTED,
@@ -59,7 +59,7 @@ from app.persistence.models import (
     MessageDraft,
     Session,
 )
-from app.persistence.repository import (
+from app.database.repository import (
     ACTION_LIST_LIMIT,
     APPROVER_LIST_LIMIT,
     MEMORY_CONTENT_MAX_CHARS,
