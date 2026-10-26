@@ -209,7 +209,7 @@ def _trim_groups(
     kept.reverse()
     return kept
 
-
+# Main Function
 def load_history_items(
     db: Database,
     session_id: str,

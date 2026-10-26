@@ -50,25 +50,16 @@ from app.database.repository import (
     get_session,
 )
 
+from app.errors.errors import (
+    InvalidSessionIdError,
+    SessionClosedError,
+    SessionNotFoundError,
+    StorageError,
+)
+
 logger = logging.getLogger("agent.service")
 
-
-class StorageError(RuntimeError):
-    """Raised when the session store cannot be read or written."""
-
-
-class InvalidSessionIdError(ValueError):
-    """Raised when a client-supplied session id is not a well-formed id."""
-
-
-class SessionNotFoundError(LookupError):
-    """Raised when a client-supplied session id does not identify a session."""
-
-
-class SessionClosedError(RuntimeError):
-    """Raised when a run is submitted against a closed session."""
-
-
+# Utility
 def is_valid_session_id(value: Any) -> bool:
     """Return True when the value is a well-formed session id."""
     if not isinstance(value, str):
@@ -79,20 +70,20 @@ def is_valid_session_id(value: Any) -> bool:
         return False
     return True
 
-
+# Utility
 def canonical_session_id(value: str) -> str:
     """Return the canonical form of a session id."""
     return str(uuid.UUID(value))
 
-
+# Utility
 def prepare_session_store(db: Database) -> None:
-    """Make sure the schema exists before a run touches the session store."""
+    """Make sure the schema exists before a agent run touches the session store."""
     try:
         db.ensure_initialized()
     except psycopg.Error as exc:
         raise StorageError("The session store is unavailable.") from exc
 
-
+# Utility
 def resolve_session_id(db: Database, requested_session_id: str | None) -> str:
     """Return the session id a run belongs to.
 
@@ -120,7 +111,7 @@ def resolve_session_id(db: Database, requested_session_id: str | None) -> str:
     except psycopg.Error as exc:
         raise StorageError("The session store is unavailable.") from exc
 
-
+# Main function
 def load_session_history(
     db: Database,
     session_id: str,
@@ -148,7 +139,7 @@ def load_session_history(
     except psycopg.Error as exc:
         raise StorageError("The session store is unavailable.") from exc
 
-
+# Main function
 def load_session_memory(
     db: Database,
     session_id: str,
@@ -181,7 +172,7 @@ def load_session_memory(
         )
         return []
 
-
+# Main function
 def build_transcript(message: str, result: AgentResult) -> list[MessageDraft]:
     """Build the ordered transcript of a single agent run.
 
@@ -229,7 +220,7 @@ def build_transcript(message: str, result: AgentResult) -> list[MessageDraft]:
 
     return drafts
 
-
+# Main function - store the conversation
 def persist_agent_run(
     db: Database,
     session_id: str,
@@ -269,7 +260,7 @@ def persist_agent_run(
         )
         return []
 
-
+# Utility
 def final_answer_message_id(messages: Sequence[Message]) -> int | None:
     """Return the id of the stored final answer of a run.
 
@@ -287,7 +278,7 @@ def final_answer_message_id(messages: Sequence[Message]) -> int | None:
             answer_id = message.id
     return answer_id
 
-
+# Main function - essential data of conversation get store in db
 def store_run_memory(
     db: Database,
     session_id: str,

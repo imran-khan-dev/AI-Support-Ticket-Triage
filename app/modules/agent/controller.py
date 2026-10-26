@@ -10,7 +10,7 @@ from app.modules.agent.service import (
     run_ticket_service,
 )
 
-from app.domain.agent.services import (
+from app.errors.errors import (
     InvalidSessionIdError,
     SessionClosedError,
     SessionNotFoundError,

@@ -56,7 +56,7 @@ CONTEXT_HEADER = (
 #: Control characters, which have no place in a one-line memory.
 _CONTROL_CHARACTERS = re.compile(r"[\x00-\x1f\x7f]")
 
-
+# Utility
 def _clean_text(text: str | None) -> str:
     """Return the text of a memory, ready to be put on one line.
 
@@ -69,7 +69,7 @@ def _clean_text(text: str | None) -> str:
     cleaned = _CONTROL_CHARACTERS.sub(" ", text)
     return " ".join(cleaned.split())
 
-
+# Utility
 def format_memory_context(
     memories: Sequence[Memory],
     max_chars: int = DEFAULT_MAX_MEMORY_CHARS,
@@ -111,7 +111,7 @@ def format_memory_context(
         return None
     return text
 
-
+# Main Function
 def build_memory_items(
     db: Database,
     session_id: str,
