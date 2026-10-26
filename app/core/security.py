@@ -42,8 +42,26 @@ TOKEN_MAX_LENGTH = 256
 SECRET_MIN_LENGTH = 32
 
 
+#: Bytes for integration credential token generation.
+INTEGRATION_TOKEN_BYTES = 32
+
+#: Prefix length for key_id lookup (non-secret).
+INTEGRATION_KEY_ID_BYTES = 4
+
+
 class CredentialError(ValueError):
     """Raised when a credential or a secret cannot be used."""
+
+
+def generate_integration_token() -> tuple[str, str]:
+    """Generate a new integration credential.
+
+    Returns (token, key_id). The token is returned once; only its hash
+    is stored. The key_id is a non-secret prefix for lookup.
+    """
+    token = secrets.token_urlsafe(INTEGRATION_TOKEN_BYTES)
+    key_id = secrets.token_urlsafe(INTEGRATION_KEY_ID_BYTES).rstrip("=")
+    return token, key_id
 
 
 def generate_approver_token() -> str:
@@ -83,6 +101,15 @@ def validate_secret(secret: object) -> str:
     if not isinstance(secret, str) or len(secret) < SECRET_MIN_LENGTH:
         raise CredentialError("The server side secret is not usable.")
     return secret
+
+
+def hash_integration_token(token: object) -> str:
+    """Hash an integration token with SHA-256.
+
+    Integration tokens are high-entropy and we use SHA-256 for storage.
+    """
+    text = validate_token(token)
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def hash_approver_token(token: object, secret: object) -> str:

@@ -117,6 +117,31 @@ AUDIT_OUTCOMES = (
 
 
 @dataclass(frozen=True)
+class Integration:
+    """A registered product integration."""
+
+    id: str
+    name: str
+    enabled: bool
+    created_at: str
+
+
+@dataclass(frozen=True)
+class IntegrationCredential:
+    """A credential used by an integration (hash only)."""
+
+    id: str
+    integration_id: str
+    token_hash: str
+    key_id: str
+    enabled: bool
+    expires_at: str | None
+    revoked_at: str | None
+    created_at: str
+    last_used_at: str | None
+
+
+@dataclass(frozen=True)
 class Session:
     """A conversation session."""
 
@@ -382,6 +407,32 @@ def approver_from_row(row: Mapping[str, Any]) -> Approver:
         role=row["role"],
         active=bool(row["active"]),
         created_at=to_iso8601(row["created_at"]),
+    )
+
+
+def integration_from_row(row: Mapping[str, Any]) -> Integration:
+    return Integration(
+        id=str(row["id"]),
+        name=row["name"],
+        enabled=bool(row["enabled"]),
+        created_at=to_iso8601(row["created_at"]),
+    )
+
+
+def integration_credential_from_row(row: Mapping[str, Any]) -> IntegrationCredential:
+    expires_at = row.get("expires_at")
+    revoked_at = row.get("revoked_at")
+    last_used_at = row.get("last_used_at")
+    return IntegrationCredential(
+        id=str(row["id"]),
+        integration_id=str(row["integration_id"]),
+        token_hash=row["token_hash"],
+        key_id=row["key_id"],
+        enabled=bool(row["enabled"]),
+        expires_at=to_iso8601(expires_at) if expires_at is not None else None,
+        revoked_at=to_iso8601(revoked_at) if revoked_at is not None else None,
+        created_at=to_iso8601(row["created_at"]),
+        last_used_at=to_iso8601(last_used_at) if last_used_at is not None else None,
     )
 
 
