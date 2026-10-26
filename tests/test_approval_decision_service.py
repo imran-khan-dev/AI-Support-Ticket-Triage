@@ -185,7 +185,7 @@ def test_audit_failure_rolls_back_decision(database, monkeypatch):
     def boom(*args, **kwargs):
         raise RuntimeError("audit failed")
 
-    monkeypatch.setattr("app.persistence.repository._insert_audit_event", boom)
+    monkeypatch.setattr("app.database.repository._insert_audit_event", boom)
 
     with pytest.raises(RuntimeError):
         decide_approval(

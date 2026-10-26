@@ -242,7 +242,7 @@ def test_audit_failure_rolls_back(database, monkeypatch):
     def boom(*args, **kwargs):
         raise RuntimeError("audit failed")
 
-    monkeypatch.setattr("app.persistence.repository._insert_audit_event", boom)
+    monkeypatch.setattr("app.database.repository._insert_audit_event", boom)
     with pytest.raises(RuntimeError):
         execute_approved_action(database, action_id=action.id)
 
@@ -275,7 +275,7 @@ def test_uncertain_outcome_preserves_claim(database, monkeypatch):
         secret=TEST_SECRET,
     )
 
-    monkeypatch.setattr("app.persistence.repository._insert_audit_event", boom)
+    monkeypatch.setattr("app.database.repository._insert_audit_event", boom)
 
     with pytest.raises(ActionExecutionUncertainError):
         execute_approved_action(database, action_id=action.id)

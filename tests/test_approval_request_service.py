@@ -180,7 +180,7 @@ def test_audit_failure_rolls_back_action(database, monkeypatch):
         raise RuntimeError("audit failed")
 
     monkeypatch.setattr(
-        "app.persistence.repository._insert_audit_event", boom
+        "app.database.repository._insert_audit_event", boom
     )
 
     with pytest.raises(RuntimeError):

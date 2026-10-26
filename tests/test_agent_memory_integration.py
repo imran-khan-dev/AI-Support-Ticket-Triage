@@ -15,7 +15,7 @@ import psycopg
 import pytest
 from fastapi.testclient import TestClient
 
-from app.modules.agent.service import StorageError
+from app.errors.errors import StorageError
 from app.database import (
     MemoryDraft,
     append_memories,
