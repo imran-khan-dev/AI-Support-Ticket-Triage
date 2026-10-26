@@ -171,6 +171,10 @@ def lookup_ticket_history(args: LookupTicketHistoryArgs) -> list[dict[str, Any]]
 # Tool registry and central execution
 # ---------------------------------------------------------------------------
 
+# Server-controlled set of tools that require approval before execution.
+# Trusted configuration only; never derived from model arguments or client claims.
+GATED_TOOLS: frozenset[str] = frozenset()
+
 # Explicit registry: tool name -> (argument schema, callable).
 # This is the single place where tools are registered. Adding a new tool
 # requires adding an entry here plus its implementation function above.
@@ -197,6 +201,14 @@ def execute_tool(tool_name: str, raw_arguments: dict[str, Any]) -> dict[str, Any
             "tool": tool_name,
             "error": "unknown_tool",
             "message": f"Tool '{tool_name}' is not registered.",
+            "results": [],
+        }
+
+    if tool_name in GATED_TOOLS:
+        return {
+            "tool": tool_name,
+            "error": "approval_required",
+            "message": f"Tool '{tool_name}' requires approval and is not executed.",
             "results": [],
         }
 

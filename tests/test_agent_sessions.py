@@ -16,7 +16,7 @@ from fastapi.testclient import TestClient
 
 from app.agent_core.agent import AgentResult
 from app.core.config import Settings
-from app.persistence import (
+from app.database import (
     MessageDraft,
     append_messages,
     create_session,
@@ -61,26 +61,6 @@ class _FakeResponses:
 class _FakeClient:
     def __init__(self, responses):
         self.responses = _FakeResponses(responses)
-
-
-class _FunctionCall:
-    """A function-call output item as the provider would return it."""
-
-    def __init__(self, call_id, name, arguments):
-        self.type = "function_call"
-        self.id = f"fc_{call_id}"
-        self.call_id = call_id
-        self.name = name
-        self.arguments = arguments
-
-    def model_dump(self):
-        return {
-            "id": self.id,
-            "type": self.type,
-            "call_id": self.call_id,
-            "name": self.name,
-            "arguments": self.arguments,
-        }
 
 
 def _settings():
@@ -380,12 +360,12 @@ def test_rejected_session_id_creates_no_session(database):
 
 
 # ---------------------------------------------------------------------------
-# Stored history is not replayed yet
+# Stored history is replayed into a continuing run
 # ---------------------------------------------------------------------------
 
 
-def test_stored_history_is_not_replayed_into_the_model(database):
-    """A continuation run sends only the new message to the provider."""
+def test_stored_history_is_replayed_into_the_model(database):
+    """A continuation run receives the earlier turns of its session."""
     existing = create_session(database)
     append_messages(
         database,
@@ -396,18 +376,7 @@ def test_stored_history_is_not_replayed_into_the_model(database):
         ],
     )
 
-    fake_client = _FakeClient(
-        [
-            _FakeResponse(
-                output=[
-                    _FunctionCall(
-                        "call_1", "search_support_docs", '{"query": "billing"}'
-                    )
-                ]
-            ),
-            _FakeResponse(output_text="The final answer."),
-        ]
-    )
+    fake_client = _FakeClient([_FakeResponse(output_text="The final answer.")])
 
     settings = _settings()
     with _route(settings, fake_client):
@@ -419,22 +388,33 @@ def test_stored_history_is_not_replayed_into_the_model(database):
     assert response.status_code == 200
     assert response.json()["status"] == "success"
 
-    # The provider only ever saw the new message: no stored history, and no
-    # tool output from an earlier run.
-    for request in fake_client.responses.requests:
-        user_texts = [
-            item["content"][0]["text"]
-            for item in request["input"]
-            if item.get("type") == "message" and item.get("role") == "user"
-        ]
-        assert user_texts == ["A new question."]
+    request = fake_client.responses.requests[0]
+    user_texts = [
+        item["content"][0]["text"]
+        for item in request["input"]
+        if item.get("type") == "message" and item.get("role") == "user"
+    ]
+    assistant_texts = [
+        item["content"][0]["text"]
+        for item in request["input"]
+        if item.get("type") == "message" and item.get("role") == "assistant"
+    ]
 
-        output_call_ids = {
-            item["call_id"]
-            for item in request["input"]
-            if item.get("type") == "function_call_output"
-        }
-        assert output_call_ids <= {"call_1"}
+    # The earlier turns come first, the current message last.
+    assert user_texts == ["An older question.", "A new question."]
+    assert assistant_texts == ["An older answer."]
+
+    # The message of the current run is sent exactly once.
+    assert user_texts.count("A new question.") == 1
+
+    # No tool output of an earlier run is replayed: the stored transcript has
+    # no tool call in it.
+    output_call_ids = {
+        item["call_id"]
+        for item in request["input"]
+        if item.get("type") == "function_call_output"
+    }
+    assert output_call_ids == set()
 
 
 # ---------------------------------------------------------------------------

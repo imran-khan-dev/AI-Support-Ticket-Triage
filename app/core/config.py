@@ -1,6 +1,19 @@
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+#: Default number of stored messages that are replayed into a continuing run.
+#:
+#: A tool call and its output are always replayed together, so the number of
+#: messages that are actually sent can be smaller than this limit.
+DEFAULT_MAX_HISTORY_MESSAGES = 20
+
+#: Default number of stored memories that are recalled into a run.
+DEFAULT_MAX_MEMORY_ITEMS = 3
+
+#: Default maximum number of characters of recalled memory that are injected
+#: into a run, the label of the context included.
+DEFAULT_MAX_MEMORY_CHARS = 1200
+
 
 class Settings(BaseSettings):
     """Application settings."""
@@ -28,4 +41,40 @@ class Settings(BaseSettings):
         "the DATABASE_URL environment variable. When it is not configured the "
         "application still starts, and the endpoints that need storage answer "
         "with a service-unavailable response.",
+    )
+
+    agent_max_history_messages: int = Field(
+        default=DEFAULT_MAX_HISTORY_MESSAGES,
+        ge=0,
+        description="Maximum number of stored messages of a session that are "
+        "replayed into a continuing agent run. Read from the "
+        "AGENT_MAX_HISTORY_MESSAGES environment variable. A tool call and "
+        "its output are always replayed together, so the effective history "
+        "can be shorter than this limit. Zero disables history replay.",
+    )
+
+    agent_max_memory_items: int = Field(
+        default=DEFAULT_MAX_MEMORY_ITEMS,
+        ge=0,
+        description="Maximum number of stored memories that are recalled into "
+        "a run. Read from the AGENT_MAX_MEMORY_ITEMS environment variable. "
+        "Zero disables the recall.",
+    )
+
+    agent_max_memory_chars: int = Field(
+        default=DEFAULT_MAX_MEMORY_CHARS,
+        ge=0,
+        description="Maximum number of characters of recalled memory that are "
+        "injected into a run, the label of the context included. Read from "
+        "the AGENT_MAX_MEMORY_CHARS environment variable. Zero disables the "
+        "recall.",
+    )
+
+    approver_token_secret: str | None = Field(
+        default=None,
+        description="Server side secret that keys the digests of the approver "
+        "credentials. Read from the APPROVER_TOKEN_SECRET environment "
+        "variable. It never leaves the server and is never stored in the "
+        "database. When it is not configured, approver credentials cannot "
+        "be created or verified.",
     )

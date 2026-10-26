@@ -153,10 +153,76 @@ CREATE TRIGGER trg_audit_events_append_only
     FOR EACH ROW EXECUTE FUNCTION audit_events_append_only();
 """
 
+# ---------------------------------------------------------------------------
+# Migration 2: full-text search over memories
+# ---------------------------------------------------------------------------
+#
+# The memories table was created empty by Migration 1. It gains a generated
+# column that holds the search vector of its content, and a GIN index over
+# that column, so that the memories of a session can be searched with
+# PostgreSQL full-text search.
+#
+# The column is generated, so it is never written by the application: the
+# database keeps it in step with the content. The English text search
+# configuration is part of the generation expression, which makes it
+# immutable and therefore allowed in a generated column. Changing the
+# configuration later needs a new migration.
+MIGRATION_2 = """
+ALTER TABLE memories
+    ADD COLUMN search_vector tsvector
+    GENERATED ALWAYS AS (to_tsvector('english', content)) STORED;
+
+CREATE INDEX ix_memories_search ON memories USING GIN (search_vector);
+"""
+
+# ---------------------------------------------------------------------------
+# Migration 3: link audit events to the action they describe
+# ---------------------------------------------------------------------------
+#
+# An audit event names the action it belongs to, so that the history of an
+# action can be found, and so that an event cannot be attached to an action
+# that does not exist.
+#
+# The reference is restrictive rather than cascading: the audit table is
+# append-only, and clearing the reference of an event would be an update of
+# an audit row, which the trigger of the table refuses. An action that has
+# audit events therefore cannot be deleted, and its history stays complete
+# and untouched. An action without events can be deleted as usual.
+#
+# The append-only trigger of the table is left alone: an event still cannot
+# be changed or removed.
+MIGRATION_3 = """
+ALTER TABLE audit_events
+    ADD COLUMN action_id UUID REFERENCES actions(id) ON DELETE RESTRICT;
+
+CREATE INDEX ix_audit_events_action_id ON audit_events (action_id);
+"""
+
+# ---------------------------------------------------------------------------
+# Migration 4: make the credential of an approver unique
+# ---------------------------------------------------------------------------
+#
+# The digest of a credential is the identifier of that credential: it is
+# what a presented credential is looked up by. The column was not unique
+# and not even indexed, so the same credential could be held by two
+# approvers and the lookup could not tell them apart.
+#
+# The index is unique, so a credential belongs to exactly one approver.
+# The table holds no rows in a database that never stored an approver, so
+# the index is applied without a conflict; a database that does hold
+# approvers with the same digest would fail this migration and keep its
+# previous schema, because a migration is applied in one transaction.
+MIGRATION_4 = """
+CREATE UNIQUE INDEX ux_approvers_token_hash ON approvers (token_hash);
+"""
+
 # Ordered list of (version, name, sql) triples. Never edit an applied
 # migration; append a new numbered entry instead.
 MIGRATIONS: list[tuple[int, str, str]] = [
     (1, "initial_schema", MIGRATION_1),
+    (2, "memory_full_text_search", MIGRATION_2),
+    (3, "action_audit_link", MIGRATION_3),
+    (4, "approver_credential_uniqueness", MIGRATION_4),
 ]
 
 #: Arbitrary key for the advisory lock that serializes migration runs.

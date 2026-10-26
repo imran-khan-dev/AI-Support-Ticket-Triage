@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from app.router import router
-from app.persistence import close_pools
+from app.database import close_pools
 import os
 from contextlib import asynccontextmanager
 from fastapi.staticfiles import StaticFiles
@@ -35,3 +35,4 @@ _frontend_dir = os.path.normpath(
 app.mount("/", StaticFiles(directory=_frontend_dir, html=True), name="frontend")
 
 # python -m uvicorn main:app --reload
+# python -m pip install -r requirements.txt

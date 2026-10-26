@@ -11,7 +11,7 @@ import pytest
 from psycopg import errors
 
 from app.core.config import Settings
-from app.persistence import (
+from app.database import (
     Database,
     DatabaseConfigurationError,
     MessageDraft,
@@ -25,7 +25,7 @@ from app.persistence import (
     list_sessions,
     resolve_database_url,
 )
-from app.persistence.migrations import MIGRATIONS, current_version
+from app.database.migrations import MIGRATIONS, current_version
 
 EXPECTED_TABLES = {
     "sessions",
@@ -62,9 +62,12 @@ def test_initialization_creates_every_table(database):
 def test_migrations_record_the_schema_version(database):
     """The schema version is stored in the database."""
     with database.connection() as conn:
-        assert current_version(conn) == 1
+        assert current_version(conn) == MIGRATIONS[-1][0]
     assert current_version.__module__.endswith("migrations")
-    assert MIGRATIONS[-1][0] == 1
+    assert MIGRATIONS[-1][0] == 4
+    assert (3, "action_audit_link") in [
+        (version, name) for version, name, _ in MIGRATIONS
+    ]
 
 
 def test_migrations_are_idempotent(database, clean_database):
@@ -226,14 +229,21 @@ def test_get_database_returns_one_instance_per_url(database):
 
 def test_connections_are_reused_from_the_pool(database):
     """The pool reuses backend connections instead of opening one per request."""
+    pool = get_pool(database.url)
+    requests = 20
+
     backend_pids = set()
-    for _ in range(20):
+    for _ in range(requests):
         with database.connection() as conn:
             backend_pids.add(
                 conn.execute("SELECT pg_backend_pid() AS pid").fetchone()["pid"]
             )
 
-    assert len(backend_pids) <= 2
+    # Far fewer connections than requests were used, so the connections are
+    # pooled and reused rather than opened per request. The pool may already
+    # hold connections from earlier tests, so the bound is its own size.
+    assert len(backend_pids) < requests
+    assert len(backend_pids) <= pool.get_stats()["pool_max"]
 
 
 def test_a_closed_handle_refuses_to_be_used(database):
