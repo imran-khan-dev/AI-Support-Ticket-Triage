@@ -1225,3 +1225,118 @@ def set_approver_active(
     if row is None:
         return None
     return approver_from_row(row)
+
+
+# ---------------------------------------------------------------------------
+# Integrations
+# ---------------------------------------------------------------------------
+
+
+def create_integration(db: Database, *, name: str):
+    from app.database.models import integration_from_row
+
+    with db.write_transaction() as conn:
+        row = conn.execute(
+            "INSERT INTO integrations (id, name, enabled)"
+            " VALUES (%s, %s, TRUE)"
+            " RETURNING id, name, enabled, created_at",
+            (str(uuid.uuid4()), name),
+        ).fetchone()
+    if row is None:
+        raise RuntimeError("The integration was not stored.")
+    return integration_from_row(row)
+
+
+def get_integration(db: Database, integration_id: str):
+    from app.database.models import integration_from_row
+
+    canonical = _canonical_uuid(integration_id)
+    if canonical is None:
+        return None
+    with db.connection() as conn:
+        row = conn.execute(
+            "SELECT id, name, enabled, created_at FROM integrations WHERE id = %s",
+            (canonical,),
+        ).fetchone()
+    if row is None:
+        return None
+    return integration_from_row(row)
+
+
+def get_integration_by_name(db: Database, name: str):
+    from app.database.models import integration_from_row
+
+    with db.connection() as conn:
+        row = conn.execute(
+            "SELECT id, name, enabled, created_at FROM integrations WHERE name = %s",
+            (name,),
+        ).fetchone()
+    if row is None:
+        return None
+    return integration_from_row(row)
+
+
+def create_integration_credential(
+    db: Database,
+    *,
+    integration_id: str,
+    token_hash: str,
+    key_id: str,
+    expires_at=None,
+):
+    from app.database.models import integration_credential_from_row
+
+    canonical = _canonical_uuid(integration_id)
+    if canonical is None:
+        raise ValueError("integration_id is not a valid UUID.")
+    with db.write_transaction() as conn:
+        row = conn.execute(
+            "INSERT INTO integration_credentials"
+            " (id, integration_id, token_hash, key_id, enabled, expires_at)"
+            " VALUES (%s, %s, %s, %s, TRUE, %s)"
+            " RETURNING id, integration_id, token_hash, key_id, enabled,"
+            " expires_at, revoked_at, created_at, last_used_at",
+            (str(uuid.uuid4()), canonical, token_hash, key_id, expires_at),
+        ).fetchone()
+    if row is None:
+        raise RuntimeError("The integration credential was not stored.")
+    return integration_credential_from_row(row)
+
+
+def get_integration_credential_by_hash(db: Database, token_hash: str):
+    from app.database.models import integration_credential_from_row
+
+    with db.connection() as conn:
+        row = conn.execute(
+            "SELECT id, integration_id, token_hash, key_id, enabled,"
+            " expires_at, revoked_at, created_at, last_used_at"
+            " FROM integration_credentials WHERE token_hash = %s",
+            (token_hash,),
+        ).fetchone()
+    if row is None:
+        return None
+    return integration_credential_from_row(row)
+
+
+def revoke_integration_credential(db: Database, credential_id: str) -> bool:
+    canonical = _canonical_uuid(credential_id)
+    if canonical is None:
+        return False
+    with db.write_transaction() as conn:
+        result = conn.execute(
+            "UPDATE integration_credentials SET revoked_at = now()"
+            " WHERE id = %s AND revoked_at IS NULL",
+            (canonical,),
+        )
+    return result.rowcount > 0
+
+
+def touch_integration_credential(db: Database, credential_id: str) -> None:
+    canonical = _canonical_uuid(credential_id)
+    if canonical is None:
+        return
+    with db.write_transaction() as conn:
+        conn.execute(
+            "UPDATE integration_credentials SET last_used_at = now() WHERE id = %s",
+            (canonical,),
+        )

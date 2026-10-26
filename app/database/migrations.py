@@ -216,14 +216,47 @@ MIGRATION_4 = """
 CREATE UNIQUE INDEX ux_approvers_token_hash ON approvers (token_hash);
 """
 
-# Ordered list of (version, name, sql) triples. Never edit an applied
-# migration; append a new numbered entry instead.
-MIGRATIONS: list[tuple[int, str, str]] = [
-    (1, "initial_schema", MIGRATION_1),
-    (2, "memory_full_text_search", MIGRATION_2),
-    (3, "action_audit_link", MIGRATION_3),
-    (4, "approver_credential_uniqueness", MIGRATION_4),
-]
+# ---------------------------------------------------------------------------
+# Migration 5: integration identity and credentials
+# ---------------------------------------------------------------------------
+#
+# Integrations represent registered product backends. Credentials are
+# bearer tokens used by integrations to authenticate to the AI backend.
+# Only hashes of credentials are stored; tokens are returned once at
+# issuance.
+#
+MIGRATION_5 = """
+CREATE TABLE integrations (
+    id          UUID PRIMARY KEY,
+    name        TEXT NOT NULL UNIQUE,
+    enabled     BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE integration_credentials (
+    id             UUID PRIMARY KEY,
+    integration_id UUID NOT NULL REFERENCES integrations(id) ON DELETE CASCADE,
+    token_hash     TEXT NOT NULL,
+    key_id         TEXT NOT NULL,
+    enabled        BOOLEAN NOT NULL DEFAULT TRUE,
+    expires_at     TIMESTAMPTZ,
+    revoked_at     TIMESTAMPTZ,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_used_at   TIMESTAMPTZ,
+    CONSTRAINT integration_credentials_key_id_check
+        CHECK (key_id <> '')
+);
+
+CREATE UNIQUE INDEX ux_integration_credentials_token_hash
+    ON integration_credentials (token_hash);
+
+CREATE INDEX ix_integration_credentials_integration
+    ON integration_credentials (integration_id);
+
+CREATE INDEX ix_integration_credentials_lookup
+    ON integration_credentials (key_id, enabled, revoked_at, expires_at);
+"""
+
 
 #: Arbitrary key for the advisory lock that serializes migration runs.
 MIGRATION_LOCK_KEY = 0x7A11_3E01
@@ -294,3 +327,14 @@ def apply_migrations(conn: psycopg.Connection) -> list[int]:
     finally:
         conn.execute("SELECT pg_advisory_unlock(%s)", (MIGRATION_LOCK_KEY,))
         conn.commit()
+
+
+# Ordered list of (version, name, sql) triples. Never edit an applied
+# migration; append a new numbered entry instead.
+MIGRATIONS: list[tuple[int, str, str]] = [
+    (1, "initial_schema", MIGRATION_1),
+    (2, "memory_full_text_search", MIGRATION_2),
+    (3, "action_audit_link", MIGRATION_3),
+    (4, "approver_credential_uniqueness", MIGRATION_4),
+    (5, "integration_identity_and_credentials", MIGRATION_5),
+]
