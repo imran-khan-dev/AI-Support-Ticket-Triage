@@ -1239,7 +1239,7 @@ def create_integration(db: Database, *, name: str):
         row = conn.execute(
             "INSERT INTO integrations (id, name, enabled)"
             " VALUES (%s, %s, TRUE)"
-            " RETURNING id, name, enabled, created_at",
+            " RETURNING id, name, enabled, created_at, tenant_id",
             (str(uuid.uuid4()), name),
         ).fetchone()
     if row is None:
@@ -1255,7 +1255,7 @@ def get_integration(db: Database, integration_id: str):
         return None
     with db.connection() as conn:
         row = conn.execute(
-            "SELECT id, name, enabled, created_at FROM integrations WHERE id = %s",
+            "SELECT id, name, enabled, created_at, tenant_id FROM integrations WHERE id = %s",
             (canonical,),
         ).fetchone()
     if row is None:
@@ -1268,12 +1268,34 @@ def get_integration_by_name(db: Database, name: str):
 
     with db.connection() as conn:
         row = conn.execute(
-            "SELECT id, name, enabled, created_at FROM integrations WHERE name = %s",
+            "SELECT id, name, enabled, created_at, tenant_id FROM integrations WHERE name = %s",
             (name,),
         ).fetchone()
     if row is None:
         return None
     return integration_from_row(row)
+
+
+def get_tenant(db: Database, tenant_id: str):
+    from app.database.models import Tenant, to_iso8601
+
+    canonical = _canonical_uuid(tenant_id)
+    if canonical is None:
+        return None
+    with db.connection() as conn:
+        row = conn.execute(
+            "SELECT id, name, enabled, created_at, updated_at FROM tenants WHERE id = %s",
+            (canonical,),
+        ).fetchone()
+    if row is None:
+        return None
+    return Tenant(
+        id=str(row["id"]),
+        name=row["name"],
+        enabled=bool(row["enabled"]),
+        created_at=to_iso8601(row["created_at"]),
+        updated_at=to_iso8601(row["updated_at"]),
+    )
 
 
 def create_integration_credential(

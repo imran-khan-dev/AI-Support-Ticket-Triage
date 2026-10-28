@@ -117,6 +117,17 @@ AUDIT_OUTCOMES = (
 
 
 @dataclass(frozen=True)
+class Tenant:
+    """A tenant."""
+
+    id: str
+    name: str
+    enabled: bool
+    created_at: str
+    updated_at: str
+
+
+@dataclass(frozen=True)
 class Integration:
     """A registered product integration."""
 
@@ -124,6 +135,7 @@ class Integration:
     name: str
     enabled: bool
     created_at: str
+    tenant_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -411,11 +423,13 @@ def approver_from_row(row: Mapping[str, Any]) -> Approver:
 
 
 def integration_from_row(row: Mapping[str, Any]) -> Integration:
+    tenant_id = row.get("tenant_id")
     return Integration(
         id=str(row["id"]),
         name=row["name"],
         enabled=bool(row["enabled"]),
         created_at=to_iso8601(row["created_at"]),
+        tenant_id=str(tenant_id) if tenant_id is not None else None,
     )
 
 
