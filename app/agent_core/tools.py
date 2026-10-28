@@ -16,6 +16,8 @@ from app.agent_core.tool_schemas import LookupTicketHistoryArgs, SearchSupportDo
 
 # ---------------------------------------------------------------------------
 # Fixture data: fictional support documentation
+# These documents are intentionally global and non-sensitive support knowledge.
+# They must not contain tenant-private data. No tenant-specific filtering is applied.
 # ---------------------------------------------------------------------------
 
 _SUPPORT_DOCS = [
@@ -146,25 +148,10 @@ def search_support_docs(args: SearchSupportDocsArgs) -> list[dict[str, Any]]:
 def lookup_ticket_history(args: LookupTicketHistoryArgs) -> list[dict[str, Any]]:
     """Look up fictional ticket history records matching the query.
 
-    Returns a list of records with ticket_id, issue, category, and resolution.
-    Returns an empty list when no records match.
+    Ticket history lookup is disabled while ticket ownership is unverified.
+    This function is not exposed via the tool registry and must not be called.
     """
-    query = args.query
-    results: list[dict[str, Any]] = []
-    for record in _TICKET_HISTORY:
-        if _match_query(
-            query,
-            [record["issue"], record["category"], record["resolution"]],
-        ):
-            results.append(
-                {
-                    "ticket_id": record["ticket_id"],
-                    "issue": record["issue"],
-                    "category": record["category"],
-                    "resolution": record["resolution"],
-                }
-            )
-    return results
+    return []
 
 
 # ---------------------------------------------------------------------------
@@ -180,7 +167,6 @@ GATED_TOOLS: frozenset[str] = frozenset()
 # requires adding an entry here plus its implementation function above.
 TOOL_REGISTRY: dict[str, tuple[type[Any], Any]] = {
     "search_support_docs": (SearchSupportDocsArgs, search_support_docs),
-    "lookup_ticket_history": (LookupTicketHistoryArgs, lookup_ticket_history),
 }
 
 
