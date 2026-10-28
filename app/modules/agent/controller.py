@@ -26,10 +26,11 @@ TRANSCRIPT_STORED_HEADER = "X-Transcript-Stored"
 async def resolve_ticket_controller(
     request: TicketResolveRequest,
     response: Response,
+    http_request=None,
 ) -> TicketResolveResponse:
     """Coordinate the service call and translate outcomes into HTTP responses."""
     try:
-        outcome = run_ticket_service(request)
+        outcome = run_ticket_service(request, http_request=http_request)
 
     except InvalidSessionIdError:
         raise HTTPException(

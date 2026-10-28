@@ -27,10 +27,11 @@ from app.database.models import (
 from app.database.repository import (
     ActionConflictError,
     claim_action_for_execution,
-    get_action,
     mark_action_executed_with_audit,
-    release_action_execution_claim,
+    get_action,
+    get_action_for_tenant,
 )
+
 
 
 class ActionExecutionError(RuntimeError):
@@ -56,10 +57,16 @@ def execute_approved_action(
     *,
     action_id: str,
     executed_by: str = "system",
+    tenant_id: str | None = None,
 ) -> ActionExecutionResult:
     """Execute an approved action using its persisted tool and arguments."""
-    action = get_action(db, action_id)
+    if tenant_id is not None:
+        action = get_action_for_tenant(db, action_id, tenant_id)
+    else:
+        action = get_action(db, action_id)
     if action is None:
+        raise ActionExecutionError("The action does not exist.")
+    if action.tenant_id is None and tenant_id is not None:
         raise ActionExecutionError("The action does not exist.")
     if action.state != ACTION_STATE_APPROVED:
         if action.state == ACTION_STATE_EXECUTED:

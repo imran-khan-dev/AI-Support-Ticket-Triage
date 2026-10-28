@@ -30,6 +30,8 @@ from app.database.repository import (
     ActionConflictError,
     decide_action_with_audit,
     get_action,
+    get_action_for_tenant,
+    get_session,
 )
 
 
@@ -58,6 +60,7 @@ def decide_approval(
     approver_token: object,
     secret: str,
     reason: str | None = None,
+    tenant_id: str | None = None,
 ) -> ApprovalDecisionResult:
     """Approve or reject a pending action as an authenticated approver."""
     if decision not in ACTION_DECISION_STATES:
@@ -73,8 +76,13 @@ def decide_approval(
             "The approver is not authorized to decide actions."
         )
 
-    action = get_action(db, action_id)
+    if tenant_id is not None:
+        action = get_action_for_tenant(db, action_id, tenant_id)
+    else:
+        action = get_action(db, action_id)
     if action is None:
+        raise ApprovalDecisionError("The action does not exist.")
+    if action.tenant_id is None and tenant_id is not None:
         raise ApprovalDecisionError("The action does not exist.")
     if action.state != ACTION_STATE_PENDING:
         same_decision = (

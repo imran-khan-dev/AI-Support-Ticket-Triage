@@ -30,6 +30,7 @@ class AgentRunOutcome:
 
 def run_ticket_service(
     request: TicketResolveRequest,
+    http_request=None,
 ) -> AgentRunOutcome:
     """Coordinate session setup, agent execution, and persistence."""
     run_id = str(uuid.uuid4())
@@ -37,7 +38,12 @@ def run_ticket_service(
     # 1. Prepare the database and resolve the session.
     database = get_database(settings.database_url)
     prepare_session_store(database)
-    session_id = resolve_session_id(database, request.session_id)
+    tenant_id = None
+    if http_request is not None:
+        tenant = getattr(http_request.state, "tenant", None)
+        if tenant is not None:
+            tenant_id = getattr(tenant, "id", None)
+    session_id = resolve_session_id(database, request.session_id, tenant_id=tenant_id)
 
     # 2. Load prior history and relevant memories.
     history = load_session_history(
