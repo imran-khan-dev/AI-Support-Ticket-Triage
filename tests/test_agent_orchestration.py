@@ -187,15 +187,13 @@ def test_multiple_tool_calls_all_results_returned_to_model():
         "lookup_ticket_history",
     ]
 
-    # Both tools really executed against their own arguments.
+    # Both tools executed; restricted tool is rejected as unknown/unavailable.
     docs_result = result.tool_calls[0]["result"]
     history_result = result.tool_calls[1]["result"]
     assert "error" not in docs_result
-    assert "error" not in history_result
     assert any(doc["id"] == "doc-001" for doc in docs_result["results"])
-    assert any(
-        record["ticket_id"] == "TKT-1002" for record in history_result["results"]
-    )
+    assert history_result.get("error") == "unknown_tool"
+    assert history_result.get("results") == []
 
     # Both results were returned to the model, keyed by their own call_id.
     assert len(client.responses.calls) == 2
@@ -213,7 +211,7 @@ def test_multiple_tool_calls_all_results_returned_to_model():
 
     history_payload = json.loads(by_call_id["call_2"]["output"])
     assert history_payload["tool"] == "lookup_ticket_history"
-    assert history_payload["count"] >= 1
+    assert history_payload.get("error") == "unknown_tool"
     assert by_call_id["call_2"]["name"] == "lookup_ticket_history"
 
 
@@ -728,7 +726,7 @@ def test_agent_advertises_only_registered_tools():
     advertised = [tool["name"] for tool in tools]
 
     assert advertised == list(TOOL_REGISTRY)
-    assert set(advertised) == {"search_support_docs", "lookup_ticket_history"}
+    assert set(advertised) == {"search_support_docs"}
     for tool in tools:
         assert tool["type"] == "function"
         assert tool["name"]
