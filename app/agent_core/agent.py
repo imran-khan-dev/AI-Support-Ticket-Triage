@@ -109,6 +109,12 @@ def _build_tool_definitions() -> list[dict[str, Any]]:
             field_info = args_schema.model_fields["query"]
             if field_info.description:
                 description = field_info.description
+        elif "subject" in args_schema.model_fields:
+            field_info = args_schema.model_fields["subject"]
+            if field_info.description:
+                description = "Create a support case"
+        elif tool_name == "create_support_case":
+            description = "Create a support case"
         definitions.append(
             {
                 "type": "function",
@@ -128,7 +134,9 @@ def _get_system_prompt() -> str:
         "tools, then providing a final answer.\n\n"
         "Available tools:\n"
         "- search_support_docs: search support documentation for answers to "
-        "common questions about password resets, billing, login, and more.\n\n"
+        "common questions about password resets, billing, login, and more.\n"
+        "- create_support_case: create a support case for consequential actions "
+        "(requires approval).\n\n"
         "Rules:\n"
         "1. Use tools to gather evidence before answering when the question "
         "relates to support documentation.\n"

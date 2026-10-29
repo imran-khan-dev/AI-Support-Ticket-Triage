@@ -8,6 +8,8 @@ The approval endpoints are not part of it yet.
 
 from app.modules.approvals.policy import (
     CAPABILITY_DECIDE_ACTION,
+    CAPABILITY_EXECUTE_ACTION,
+    CAPABILITY_EXECUTE_ANY_TENANT,
     CAPABILITY_LIST_ACTIONS,
     CAPABILITY_MANAGE_APPROVERS,
     KNOWN_CAPABILITIES,
@@ -29,6 +31,8 @@ __all__ = [
     "ApproverCredentialInUseError",
     "ApproverError",
     "CAPABILITY_DECIDE_ACTION",
+    "CAPABILITY_EXECUTE_ACTION",
+    "CAPABILITY_EXECUTE_ANY_TENANT",
     "CAPABILITY_LIST_ACTIONS",
     "CAPABILITY_MANAGE_APPROVERS",
     "KNOWN_CAPABILITIES",

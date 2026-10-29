@@ -13,7 +13,8 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
-from app.agent_core.tools import GATED_TOOLS, TOOL_REGISTRY
+from app.agent_core.tools import GATED_TOOLS, TOOL_REGISTRY, get_default_support_case_adapter
+from app.agent_core import tools as tools_module
 from app.modules.approvals.policy import CAPABILITY_DECIDE_ACTION, is_authorized
 from app.modules.approvals.service import authenticate_approver
 from app.database.db import Database
@@ -30,6 +31,7 @@ from app.database.repository import (
     mark_action_executed_with_audit,
     get_action,
     get_action_for_tenant,
+    release_action_execution_claim,
 )
 
 
@@ -58,6 +60,36 @@ def execute_approved_action(
     action_id: str,
     executed_by: str = "system",
     tenant_id: str | None = None,
+    adapter: Any | None = None,
+) -> ActionExecutionResult:
+    """Execute an approved action using its persisted tool and arguments."""
+    if tenant_id is not None:
+        action = get_action_for_tenant(db, action_id, tenant_id)
+    else:
+        action = get_action(db, action_id)
+    if action is None:
+        raise ActionExecutionError("The action does not exist.")
+    if action.tenant_id is None and tenant_id is not None:
+        raise ActionExecutionError("The action does not exist.")
+    if action.state != ACTION_STATE_APPROVED:
+        if action.state == ACTION_STATE_EXECUTED:
+            return ActionExecutionResult(
+                action=action, result=None, executed=False, audit_event=None
+            )
+        raise ActionExecutionError("The action is not approved.")
+
+    if action.tool_name not in TOOL_REGISTRY:
+        raise ActionExecutionError("The action's tool is not registered.")
+    if action.tool_name not in GATED_TOOLS:
+        raise ActionExecutionError("The action's tool is not permitted.")
+
+def execute_approved_action(
+    db: Database,
+    *,
+    action_id: str,
+    executed_by: str = "system",
+    tenant_id: str | None = None,
+    adapter: Any | None = None,
 ) -> ActionExecutionResult:
     """Execute an approved action using its persisted tool and arguments."""
     if tenant_id is not None:
@@ -100,6 +132,11 @@ def execute_approved_action(
             )
         raise ActionExecutionError("The action could not be claimed for execution.")
 
+    # Resolve adapter explicitly (server-controlled, no global swapping)
+    resolved_adapter = adapter
+    if resolved_adapter is None and action.tool_name == "create_support_case":
+        resolved_adapter = get_default_support_case_adapter()
+
     audit_draft = AuditDraft(
         actor_type="system",
         actor_id=executed_by,
@@ -116,7 +153,10 @@ def execute_approved_action(
     )
 
     try:
-        tool_result = tool_func(validated_args)
+        if action.tool_name == "create_support_case" and resolved_adapter is not None:
+            tool_result = [resolved_adapter.create_support_case(validated_args)]
+        else:
+            tool_result = tool_func(validated_args)
     except Exception as exc:
         audit_draft = AuditDraft(
             actor_type="system",

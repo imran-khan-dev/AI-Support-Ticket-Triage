@@ -726,13 +726,19 @@ def test_agent_advertises_only_registered_tools():
     advertised = [tool["name"] for tool in tools]
 
     assert advertised == list(TOOL_REGISTRY)
-    assert set(advertised) == {"search_support_docs"}
+    assert set(advertised) == {"search_support_docs", "create_support_case"}
     for tool in tools:
         assert tool["type"] == "function"
         assert tool["name"]
         assert tool["description"]
         assert tool["parameters"]["type"] == "object"
-        assert "query" in tool["parameters"]["properties"]
+        if tool["name"] == "search_support_docs":
+            assert "query" in tool["parameters"]["properties"]
+        elif tool["name"] == "create_support_case":
+            assert "subject" in tool["parameters"]["properties"]
+            assert "description" in tool["parameters"]["properties"]
+            assert "priority" in tool["parameters"]["properties"]
+            assert "category" in tool["parameters"]["properties"]
         assert tool["parameters"]["additionalProperties"] is False
 
 

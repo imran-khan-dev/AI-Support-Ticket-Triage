@@ -1,8 +1,18 @@
 import pytest
 from pydantic import ValidationError
 
-from app.agent_core.tool_schemas import LookupTicketHistoryArgs, SearchSupportDocsArgs
-from app.agent_core.tools import execute_tool, search_support_docs, lookup_ticket_history
+from app.agent_core.tool_schemas import (
+    CreateSupportCaseArgs,
+    LookupTicketHistoryArgs,
+    SearchSupportDocsArgs,
+)
+from app.agent_core.tools import (
+    TOOL_REGISTRY,
+    create_support_case,
+    execute_tool,
+    lookup_ticket_history,
+    search_support_docs,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -199,6 +209,91 @@ def test_execute_tool_does_not_execute_tool_on_invalid_args():
     result = execute_tool("search_support_docs", {"query": ""})
     assert result["results"] == []
     assert result["error"] == "invalid_arguments"
+
+
+def test_execute_tool_gated_tool_returns_approval_required():
+    result = execute_tool(
+        "create_support_case",
+        {
+            "subject": "Login issue",
+            "description": "Cannot log in",
+            "priority": "high",
+            "category": "account",
+        },
+    )
+    assert result["tool"] == "create_support_case"
+    assert result["error"] == "approval_required"
+    assert result["results"] == []
+
+
+# ---------------------------------------------------------------------------
+# create_support_case schema tests
+# ---------------------------------------------------------------------------
+
+
+def test_create_support_case_args_requires_all_fields():
+    with pytest.raises(ValidationError):
+        CreateSupportCaseArgs()
+
+
+def test_create_support_case_args_rejects_empty_subject():
+    with pytest.raises(ValidationError):
+        CreateSupportCaseArgs(
+            subject="",
+            description="desc",
+            priority="low",
+            category="cat",
+        )
+
+
+def test_create_support_case_args_rejects_empty_description():
+    with pytest.raises(ValidationError):
+        CreateSupportCaseArgs(
+            subject="subj",
+            description="   ",
+            priority="low",
+            category="cat",
+        )
+
+
+def test_create_support_case_args_rejects_invalid_priority():
+    with pytest.raises(ValidationError):
+        CreateSupportCaseArgs(
+            subject="subj",
+            description="desc",
+            priority="critical",
+            category="cat",
+        )
+
+
+def test_create_support_case_args_strips_whitespace():
+    args = CreateSupportCaseArgs(
+        subject="  Login issue  ",
+        description="  Cannot log in  ",
+        priority="high",
+        category="  account  ",
+    )
+    assert args.subject == "Login issue"
+    assert args.description == "Cannot log in"
+    assert args.category == "account"
+    assert args.priority == "high"
+
+
+def test_create_support_case_args_rejects_overly_long_subject():
+    with pytest.raises(ValidationError):
+        CreateSupportCaseArgs(
+            subject="x" * 201,
+            description="desc",
+            priority="low",
+            category="cat",
+        )
+
+
+def test_create_support_case_registered():
+    assert "create_support_case" in TOOL_REGISTRY
+    args_schema, func = TOOL_REGISTRY["create_support_case"]
+    assert args_schema is CreateSupportCaseArgs
+    assert func is create_support_case
 
 
 def test_tools_are_read_only():
