@@ -117,6 +117,17 @@ AUDIT_OUTCOMES = (
 
 
 @dataclass(frozen=True)
+class Tenant:
+    """A tenant."""
+
+    id: str
+    name: str
+    enabled: bool
+    created_at: str
+    updated_at: str
+
+
+@dataclass(frozen=True)
 class Integration:
     """A registered product integration."""
 
@@ -124,6 +135,7 @@ class Integration:
     name: str
     enabled: bool
     created_at: str
+    tenant_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -151,6 +163,7 @@ class Session:
     status: str
     ticket_id: str | None
     title: str | None
+    tenant_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -231,6 +244,7 @@ class Action:
     execution_error: str | None
     executed_by: str | None
     executed_at: str | None
+    tenant_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -321,6 +335,7 @@ def to_iso8601(value: Any) -> str:
 
 def session_from_row(row: Mapping[str, Any]) -> Session:
     """Build a :class:`Session` from a database row."""
+    tenant_id = row.get("tenant_id")
     return Session(
         id=str(row["id"]),
         created_at=to_iso8601(row["created_at"]),
@@ -328,6 +343,7 @@ def session_from_row(row: Mapping[str, Any]) -> Session:
         status=row["status"],
         ticket_id=row["ticket_id"],
         title=row["title"],
+        tenant_id=str(tenant_id) if tenant_id is not None else None,
     )
 
 
@@ -374,6 +390,7 @@ def _optional_iso8601(value: Any) -> str | None:
 def action_from_row(row: Mapping[str, Any]) -> Action:
     """Build an :class:`Action` from a database row."""
     session_id = row["session_id"]
+    tenant_id = row.get("tenant_id")
     return Action(
         id=str(row["id"]),
         request_key=row["request_key"],
@@ -393,6 +410,7 @@ def action_from_row(row: Mapping[str, Any]) -> Action:
         execution_error=row["execution_error"],
         executed_by=row["executed_by"],
         executed_at=_optional_iso8601(row["executed_at"]),
+        tenant_id=str(tenant_id) if tenant_id is not None else None,
     )
 
 
@@ -411,11 +429,13 @@ def approver_from_row(row: Mapping[str, Any]) -> Approver:
 
 
 def integration_from_row(row: Mapping[str, Any]) -> Integration:
+    tenant_id = row.get("tenant_id")
     return Integration(
         id=str(row["id"]),
         name=row["name"],
         enabled=bool(row["enabled"]),
         created_at=to_iso8601(row["created_at"]),
+        tenant_id=str(tenant_id) if tenant_id is not None else None,
     )
 
 

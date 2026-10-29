@@ -23,6 +23,7 @@ from app.database.models import (
 from app.database.repository import (
     ActionConflictError,
     create_action_with_audit,
+    get_action,
     get_session,
 )
 
@@ -79,6 +80,7 @@ def request_approval(
     session_id: str | None = None,
     requested_by: str = "agent",
     effect_class: str = "gated_tool",
+    tenant_id: str | None = None,
 ) -> ApprovalRequestResult:
     """Persist a pending action for a gated tool without invoking it."""
     if tool_name not in TOOL_REGISTRY:
@@ -107,8 +109,14 @@ def request_approval(
     validated_correlation_id = _validate_correlation_id(correlation_id)
 
     if session_id is not None:
-        if get_session(db, session_id) is None:
+        session = get_session(db, session_id)
+        if session is None:
             raise ApprovalRequestError("The session does not exist.")
+        if tenant_id is not None:
+            if session.tenant_id is None or str(session.tenant_id) != str(tenant_id):
+                raise ApprovalRequestError("The session does not exist.")
+    elif tenant_id is not None:
+        pass
 
     audit_draft = AuditDraft(
         actor_type="agent",

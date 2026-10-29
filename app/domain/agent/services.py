@@ -84,7 +84,7 @@ def prepare_session_store(db: Database) -> None:
         raise StorageError("The session store is unavailable.") from exc
 
 # Utility
-def resolve_session_id(db: Database, requested_session_id: str | None) -> str:
+def resolve_session_id(db: Database, requested_session_id: str | None, tenant_id: str | None = None) -> str:
     """Return the session id a run belongs to.
 
     When no id is supplied a new session is created. When an id is supplied
@@ -93,7 +93,7 @@ def resolve_session_id(db: Database, requested_session_id: str | None) -> str:
     """
     try:
         if requested_session_id is None:
-            return create_session(db).id
+            return create_session(db, tenant_id=tenant_id).id
 
         candidate = str(requested_session_id).strip()
         if not is_valid_session_id(candidate):
@@ -102,6 +102,17 @@ def resolve_session_id(db: Database, requested_session_id: str | None) -> str:
             )
 
         session_id = canonical_session_id(candidate)
+        if tenant_id is not None:
+            from app.database.repository import get_session_for_tenant
+
+            session = get_session_for_tenant(db, session_id, tenant_id)
+            if session is None:
+                raise SessionNotFoundError(session_id)
+            if session.tenant_id is None:
+                raise SessionNotFoundError(session_id)
+            if session.status == SESSION_STATUS_CLOSED:
+                raise SessionClosedError(session_id)
+            return session_id
         session = get_session(db, session_id)
         if session is None:
             raise SessionNotFoundError(session_id)

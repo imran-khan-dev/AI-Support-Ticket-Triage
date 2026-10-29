@@ -40,6 +40,9 @@ CAPABILITY_DECIDE_ACTION = "action.decide"
 #: Execute an approved action.
 CAPABILITY_EXECUTE_ACTION = "action.execute"
 
+#: Execute an approved action across tenants or in tenant-independent contexts.
+CAPABILITY_EXECUTE_ANY_TENANT = "action.execute_any_tenant"
+
 #: Create approvers, and deactivate or reactivate them.
 CAPABILITY_MANAGE_APPROVERS = "approver.manage"
 
@@ -49,6 +52,7 @@ KNOWN_CAPABILITIES = (
     CAPABILITY_LIST_ACTIONS,
     CAPABILITY_DECIDE_ACTION,
     CAPABILITY_EXECUTE_ACTION,
+    CAPABILITY_EXECUTE_ANY_TENANT,
     CAPABILITY_MANAGE_APPROVERS,
 )
 
@@ -75,6 +79,7 @@ ROLE_CAPABILITIES: dict[str, frozenset[str]] = {
             CAPABILITY_LIST_ACTIONS,
             CAPABILITY_DECIDE_ACTION,
             CAPABILITY_EXECUTE_ACTION,
+            CAPABILITY_EXECUTE_ANY_TENANT,
             CAPABILITY_MANAGE_APPROVERS,
         }
     ),

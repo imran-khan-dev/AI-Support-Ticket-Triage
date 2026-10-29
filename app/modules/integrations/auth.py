@@ -5,6 +5,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.core.config import Settings
 from app.database import get_database, DatabaseConfigurationError
+from app.database.repository import get_tenant
 from app.modules.integrations.service import verify_integration_token
 
 security = HTTPBearer(auto_error=False)
@@ -35,6 +36,17 @@ def require_integration(
     if result is None:
         raise HTTPException(status_code=401, detail="Unauthorized")
     integration, credential = result
+    try:
+        if integration.tenant_id is None:
+            raise HTTPException(status_code=401, detail="Unauthorized")
+        tenant = get_tenant(database, integration.tenant_id)
+        if tenant is None or not tenant.enabled:
+            raise HTTPException(status_code=401, detail="Unauthorized")
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=401, detail="Unauthorized")
     request.state.integration = integration
     request.state.integration_credential = credential
+    request.state.tenant = tenant
     return integration

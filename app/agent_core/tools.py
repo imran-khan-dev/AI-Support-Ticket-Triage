@@ -1,21 +1,44 @@
 """Deterministic, read-only support tools for the tool-using agent layer.
 
-This module implements two small, hardcoded, read-only tools:
+This module implements small support tools.
 
-- search_support_docs: searches a fixed collection of fictional support articles.
-- lookup_ticket_history: searches a fixed collection of fictional ticket records.
-
-The tools are deterministic, require no external services, and perform no writes.
-An explicit registry maps tool names to their argument schemas and callables, and
-a central execute_tool function validates and dispatches calls safely.
+The tools are deterministic, require no external services, and perform no writes
+by default. An explicit registry maps tool names to their argument schemas and
+callables, and a central execute_tool function validates and dispatches calls safely.
 """
 
 from typing import Any
 
-from app.agent_core.tool_schemas import LookupTicketHistoryArgs, SearchSupportDocsArgs
+from app.agent_core.tool_schemas import (
+    CreateSupportCaseArgs,
+    LookupTicketHistoryArgs,
+    SearchSupportDocsArgs,
+)
+from app.integrations.external_api import FakeSupportCaseAdapter, SupportCaseAdapter
+
+
+# Server-controlled default adapter (trusted configuration only)
+_DEFAULT_SUPPORT_CASE_ADAPTER: SupportCaseAdapter = FakeSupportCaseAdapter()
+
+
+def get_default_support_case_adapter() -> SupportCaseAdapter:
+    """Return the default server-controlled adapter."""
+    return _DEFAULT_SUPPORT_CASE_ADAPTER
+
+
+def get_support_case_adapter() -> SupportCaseAdapter:
+    """Return the default server-controlled adapter used for create_support_case execution."""
+    return _DEFAULT_SUPPORT_CASE_ADAPTER
+
+
+def set_support_case_adapter(adapter: SupportCaseAdapter) -> None:
+    """Deprecated: injection is now explicit via execute_approved_action(adapter=...)."""
+    raise RuntimeError("Adapter injection via set_support_case_adapter is disabled; pass adapter explicitly.")
 
 # ---------------------------------------------------------------------------
 # Fixture data: fictional support documentation
+# These documents are intentionally global and non-sensitive support knowledge.
+# They must not contain tenant-private data. No tenant-specific filtering is applied.
 # ---------------------------------------------------------------------------
 
 _SUPPORT_DOCS = [
@@ -143,28 +166,25 @@ def search_support_docs(args: SearchSupportDocsArgs) -> list[dict[str, Any]]:
     return results
 
 
+def create_support_case(args: CreateSupportCaseArgs) -> list[dict[str, Any]]:
+    """Create a support case via an external integration.
+
+    This action is consequential and requires approval. The execution is
+    performed by the approval execution service using an injected adapter.
+    """
+    # When called directly outside approved execution, use default adapter
+    # but this path is still gated by execute_tool approval_required.
+    result = get_support_case_adapter().create_support_case(args)
+    return [result]
+
+
 def lookup_ticket_history(args: LookupTicketHistoryArgs) -> list[dict[str, Any]]:
     """Look up fictional ticket history records matching the query.
 
-    Returns a list of records with ticket_id, issue, category, and resolution.
-    Returns an empty list when no records match.
+    Ticket history lookup is disabled while ticket ownership is unverified.
+    This function is not exposed via the tool registry and must not be called.
     """
-    query = args.query
-    results: list[dict[str, Any]] = []
-    for record in _TICKET_HISTORY:
-        if _match_query(
-            query,
-            [record["issue"], record["category"], record["resolution"]],
-        ):
-            results.append(
-                {
-                    "ticket_id": record["ticket_id"],
-                    "issue": record["issue"],
-                    "category": record["category"],
-                    "resolution": record["resolution"],
-                }
-            )
-    return results
+    return []
 
 
 # ---------------------------------------------------------------------------
@@ -173,14 +193,14 @@ def lookup_ticket_history(args: LookupTicketHistoryArgs) -> list[dict[str, Any]]
 
 # Server-controlled set of tools that require approval before execution.
 # Trusted configuration only; never derived from model arguments or client claims.
-GATED_TOOLS: frozenset[str] = frozenset()
+GATED_TOOLS: frozenset[str] = frozenset({"create_support_case"})
 
 # Explicit registry: tool name -> (argument schema, callable).
 # This is the single place where tools are registered. Adding a new tool
 # requires adding an entry here plus its implementation function above.
 TOOL_REGISTRY: dict[str, tuple[type[Any], Any]] = {
     "search_support_docs": (SearchSupportDocsArgs, search_support_docs),
-    "lookup_ticket_history": (LookupTicketHistoryArgs, lookup_ticket_history),
+    "create_support_case": (CreateSupportCaseArgs, create_support_case),
 }
 
 

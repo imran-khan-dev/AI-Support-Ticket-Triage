@@ -319,12 +319,15 @@ def test_concurrent_claim_only_one_acquires(database, monkeypatch):
         secret=TEST_SECRET,
     )
 
+    errors = []
+
     def worker():
         started.wait()
         try:
             r = execute_approved_action(database, action_id=action.id)
             results.append(("ok", r.executed))
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
+            errors.append(exc)
             results.append(("err", type(exc).__name__))
 
     threads = [threading.Thread(target=worker) for _ in range(2)]
@@ -333,5 +336,7 @@ def test_concurrent_claim_only_one_acquires(database, monkeypatch):
     for t in threads:
         t.join()
 
+    assert len(errors) == 1
+    assert all(isinstance(e, ActionExecutionError) for e in errors)
     successes = [r for r in results if r[0] == "ok" and r[1] is True]
     assert len(successes) == 1

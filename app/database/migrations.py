@@ -329,6 +329,38 @@ def apply_migrations(conn: psycopg.Connection) -> list[int]:
         conn.commit()
 
 
+# ---------------------------------------------------------------------------
+# Migration 6: tenant isolation schema
+# ---------------------------------------------------------------------------
+#
+# Add tenants table and nullable tenant_id columns to integrations,
+# sessions, and actions. audit_events is not modified in this migration
+# due to ownership ambiguity; tenant scope will be handled through
+# parent relationships and/or follow-up work.
+#
+MIGRATION_6 = """
+CREATE TABLE tenants (
+    id          UUID PRIMARY KEY,
+    name        TEXT NOT NULL UNIQUE,
+    enabled     BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+ALTER TABLE integrations
+    ADD COLUMN tenant_id UUID REFERENCES tenants(id) ON DELETE RESTRICT;
+
+ALTER TABLE sessions
+    ADD COLUMN tenant_id UUID REFERENCES tenants(id) ON DELETE RESTRICT;
+
+ALTER TABLE actions
+    ADD COLUMN tenant_id UUID REFERENCES tenants(id) ON DELETE RESTRICT;
+
+CREATE INDEX idx_integrations_tenant_id ON integrations (tenant_id);
+CREATE INDEX idx_sessions_tenant_id ON sessions (tenant_id);
+CREATE INDEX idx_actions_tenant_id ON actions (tenant_id);
+"""
+
 # Ordered list of (version, name, sql) triples. Never edit an applied
 # migration; append a new numbered entry instead.
 MIGRATIONS: list[tuple[int, str, str]] = [
@@ -337,4 +369,5 @@ MIGRATIONS: list[tuple[int, str, str]] = [
     (3, "action_audit_link", MIGRATION_3),
     (4, "approver_credential_uniqueness", MIGRATION_4),
     (5, "integration_identity_and_credentials", MIGRATION_5),
+    (6, "tenant_isolation_schema", MIGRATION_6),
 ]

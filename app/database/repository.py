@@ -109,6 +109,7 @@ def create_session(
     session_id: str | None = None,
     title: str | None = None,
     ticket_id: str | None = None,
+    tenant_id: str | None = None,
 ) -> Session:
     """Create a session row and return it.
 
@@ -117,13 +118,18 @@ def create_session(
     """
     resolved_id = session_id or str(uuid.uuid4())
     now = utc_now()
+    canonical_tenant_id = None
+    if tenant_id is not None:
+        canonical_tenant_id = _canonical_uuid(tenant_id)
+        if canonical_tenant_id is None:
+            raise ValueError("tenant_id is not a valid UUID.")
     with db.write_transaction() as conn:
         row = conn.execute(
             "INSERT INTO sessions"
-            " (id, created_at, updated_at, status, ticket_id, title)"
-            " VALUES (%s, %s, %s, %s, %s, %s)"
-            " RETURNING id, created_at, updated_at, status, ticket_id, title",
-            (resolved_id, now, now, SESSION_STATUS_OPEN, ticket_id, title),
+            " (id, created_at, updated_at, status, ticket_id, title, tenant_id)"
+            " VALUES (%s, %s, %s, %s, %s, %s, %s)"
+            " RETURNING id, created_at, updated_at, status, ticket_id, title, tenant_id",
+            (resolved_id, now, now, SESSION_STATUS_OPEN, ticket_id, title, canonical_tenant_id),
         ).fetchone()
     if row is None:
         raise UnknownSessionError(resolved_id)
@@ -137,9 +143,28 @@ def get_session(db: Database, session_id: str) -> Session | None:
         return None
     with db.connection() as conn:
         row = conn.execute(
-            "SELECT id, created_at, updated_at, status, ticket_id, title"
+            "SELECT id, created_at, updated_at, status, ticket_id, title, tenant_id"
             " FROM sessions WHERE id = %s",
             (canonical,),
+        ).fetchone()
+    if row is None:
+        return None
+    return session_from_row(row)
+
+
+def get_session_for_tenant(db: Database, session_id: str, tenant_id: str) -> Session | None:
+    """Return the session with this id if it belongs to the tenant."""
+    canonical = _canonical_session_id(session_id)
+    if canonical is None:
+        return None
+    canonical_tenant = _canonical_uuid(tenant_id)
+    if canonical_tenant is None:
+        return None
+    with db.connection() as conn:
+        row = conn.execute(
+            "SELECT id, created_at, updated_at, status, ticket_id, title, tenant_id"
+            " FROM sessions WHERE id = %s AND tenant_id = %s",
+            (canonical, canonical_tenant),
         ).fetchone()
     if row is None:
         return None
@@ -513,14 +538,14 @@ def create_action(
         row = conn.execute(
             "INSERT INTO actions"
             " (id, request_key, session_id, correlation_id, tool_name,"
-            "  effect_class, args, args_hash, state, requested_by, requested_at)"
-            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
+            "  effect_class, args, args_hash, state, requested_by, requested_at, tenant_id)"
+            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
             " ON CONFLICT (request_key) DO UPDATE"
             " SET request_key = actions.request_key"
             " RETURNING id, request_key, session_id, correlation_id, tool_name,"
             " effect_class, args, args_hash, state, requested_by, requested_at,"
             " decided_by, decided_at, decision_reason, execution_status,"
-            " execution_error, executed_by, executed_at",
+            " execution_error, executed_by, executed_at, tenant_id",
             (
                 action_id or str(uuid.uuid4()),
                 request_key,
@@ -533,6 +558,7 @@ def create_action(
                 ACTION_STATE_PENDING,
                 requested_by,
                 now,
+                None,
             ),
         ).fetchone()
 
@@ -551,9 +577,31 @@ def get_action(db: Database, action_id: str) -> Action | None:
             "SELECT id, request_key, session_id, correlation_id, tool_name,"
             " effect_class, args, args_hash, state, requested_by, requested_at,"
             " decided_by, decided_at, decision_reason, execution_status,"
-            " execution_error, executed_by, executed_at"
+            " execution_error, executed_by, executed_at, tenant_id"
             " FROM actions WHERE id = %s",
             (canonical,),
+        ).fetchone()
+    if row is None:
+        return None
+    return action_from_row(row)
+
+
+def get_action_for_tenant(db: Database, action_id: str, tenant_id: str) -> Action | None:
+    canonical = _canonical_uuid(action_id)
+    if canonical is None:
+        return None
+    canonical_tenant = _canonical_uuid(tenant_id)
+    if canonical_tenant is None:
+        return None
+    with db.connection() as conn:
+        row = conn.execute(
+            "SELECT a.id, a.request_key, a.session_id, a.correlation_id, a.tool_name,"
+            " a.effect_class, a.args, a.args_hash, a.state, a.requested_by, a.requested_at,"
+            " a.decided_by, a.decided_at, a.decision_reason, a.execution_status,"
+            " a.execution_error, a.executed_by, a.executed_at, a.tenant_id"
+            " FROM actions a"
+            " WHERE a.id = %s AND a.tenant_id = %s",
+            (canonical, canonical_tenant),
         ).fetchone()
     if row is None:
         return None
@@ -1008,16 +1056,19 @@ def create_action_with_audit(
     with db.write_transaction() as conn:
         if canonical is not None:
             session = conn.execute(
-                "SELECT id FROM sessions WHERE id = %s", (canonical,)
+                "SELECT id, tenant_id FROM sessions WHERE id = %s", (canonical,)
             ).fetchone()
             if session is None:
                 raise UnknownSessionError(session_id)
+        else:
+            session = None
+        tenant_id_for_action = session["tenant_id"] if session is not None else None
 
         existing = conn.execute(
             "SELECT id, request_key, session_id, correlation_id, tool_name,"
             " effect_class, args, args_hash, state, requested_by, requested_at,"
             " decided_by, decided_at, decision_reason, execution_status,"
-            " execution_error, executed_by, executed_at"
+            " execution_error, executed_by, executed_at, tenant_id"
             " FROM actions WHERE request_key = %s",
             (request_key,),
         ).fetchone()
@@ -1035,12 +1086,12 @@ def create_action_with_audit(
         row = conn.execute(
             "INSERT INTO actions"
             " (id, request_key, session_id, correlation_id, tool_name,"
-            "  effect_class, args, args_hash, state, requested_by, requested_at)"
-            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
+            "  effect_class, args, args_hash, state, requested_by, requested_at, tenant_id)"
+            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
             " RETURNING id, request_key, session_id, correlation_id, tool_name,"
             " effect_class, args, args_hash, state, requested_by, requested_at,"
             " decided_by, decided_at, decision_reason, execution_status,"
-            " execution_error, executed_by, executed_at",
+            " execution_error, executed_by, executed_at, tenant_id",
             (
                 action_id or str(uuid.uuid4()),
                 request_key,
@@ -1053,6 +1104,7 @@ def create_action_with_audit(
                 ACTION_STATE_PENDING,
                 requested_by,
                 now,
+                tenant_id_for_action,
             ),
         ).fetchone()
         if row is None:
@@ -1239,7 +1291,7 @@ def create_integration(db: Database, *, name: str):
         row = conn.execute(
             "INSERT INTO integrations (id, name, enabled)"
             " VALUES (%s, %s, TRUE)"
-            " RETURNING id, name, enabled, created_at",
+            " RETURNING id, name, enabled, created_at, tenant_id",
             (str(uuid.uuid4()), name),
         ).fetchone()
     if row is None:
@@ -1255,7 +1307,7 @@ def get_integration(db: Database, integration_id: str):
         return None
     with db.connection() as conn:
         row = conn.execute(
-            "SELECT id, name, enabled, created_at FROM integrations WHERE id = %s",
+            "SELECT id, name, enabled, created_at, tenant_id FROM integrations WHERE id = %s",
             (canonical,),
         ).fetchone()
     if row is None:
@@ -1268,12 +1320,34 @@ def get_integration_by_name(db: Database, name: str):
 
     with db.connection() as conn:
         row = conn.execute(
-            "SELECT id, name, enabled, created_at FROM integrations WHERE name = %s",
+            "SELECT id, name, enabled, created_at, tenant_id FROM integrations WHERE name = %s",
             (name,),
         ).fetchone()
     if row is None:
         return None
     return integration_from_row(row)
+
+
+def get_tenant(db: Database, tenant_id: str):
+    from app.database.models import Tenant, to_iso8601
+
+    canonical = _canonical_uuid(tenant_id)
+    if canonical is None:
+        return None
+    with db.connection() as conn:
+        row = conn.execute(
+            "SELECT id, name, enabled, created_at, updated_at FROM tenants WHERE id = %s",
+            (canonical,),
+        ).fetchone()
+    if row is None:
+        return None
+    return Tenant(
+        id=str(row["id"]),
+        name=row["name"],
+        enabled=bool(row["enabled"]),
+        created_at=to_iso8601(row["created_at"]),
+        updated_at=to_iso8601(row["updated_at"]),
+    )
 
 
 def create_integration_credential(

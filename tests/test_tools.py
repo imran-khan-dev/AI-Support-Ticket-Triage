@@ -1,8 +1,18 @@
 import pytest
 from pydantic import ValidationError
 
-from app.agent_core.tool_schemas import LookupTicketHistoryArgs, SearchSupportDocsArgs
-from app.agent_core.tools import execute_tool, search_support_docs, lookup_ticket_history
+from app.agent_core.tool_schemas import (
+    CreateSupportCaseArgs,
+    LookupTicketHistoryArgs,
+    SearchSupportDocsArgs,
+)
+from app.agent_core.tools import (
+    TOOL_REGISTRY,
+    create_support_case,
+    execute_tool,
+    lookup_ticket_history,
+    search_support_docs,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -113,20 +123,17 @@ def test_search_support_docs_is_deterministic():
 
 def test_lookup_ticket_history_returns_password_reset_ticket():
     results = lookup_ticket_history(LookupTicketHistoryArgs(query="password reset"))
-    assert len(results) >= 1
-    assert any(rec["ticket_id"] == "TKT-1001" for rec in results)
+    assert results == []
 
 
 def test_lookup_ticket_history_returns_billing_ticket():
     results = lookup_ticket_history(LookupTicketHistoryArgs(query="billing refund"))
-    assert len(results) >= 1
-    assert any(rec["category"] == "billing" for rec in results)
+    assert results == []
 
 
 def test_lookup_ticket_history_returns_login_ticket():
     results = lookup_ticket_history(LookupTicketHistoryArgs(query="login fails"))
-    assert len(results) >= 1
-    assert any(rec["ticket_id"] == "TKT-1003" for rec in results)
+    assert results == []
 
 
 def test_lookup_ticket_history_unmatched_query_returns_no_results():
@@ -183,7 +190,7 @@ def test_execute_tool_invalid_arguments_do_not_execute_tool():
 
 def test_execute_tool_invalid_arguments_whitespace_rejected():
     result = execute_tool("lookup_ticket_history", {"query": "   "})
-    assert result["error"] == "invalid_arguments"
+    assert result["error"] == "unknown_tool"
     assert result["results"] == []
 
 
@@ -202,6 +209,91 @@ def test_execute_tool_does_not_execute_tool_on_invalid_args():
     result = execute_tool("search_support_docs", {"query": ""})
     assert result["results"] == []
     assert result["error"] == "invalid_arguments"
+
+
+def test_execute_tool_gated_tool_returns_approval_required():
+    result = execute_tool(
+        "create_support_case",
+        {
+            "subject": "Login issue",
+            "description": "Cannot log in",
+            "priority": "high",
+            "category": "account",
+        },
+    )
+    assert result["tool"] == "create_support_case"
+    assert result["error"] == "approval_required"
+    assert result["results"] == []
+
+
+# ---------------------------------------------------------------------------
+# create_support_case schema tests
+# ---------------------------------------------------------------------------
+
+
+def test_create_support_case_args_requires_all_fields():
+    with pytest.raises(ValidationError):
+        CreateSupportCaseArgs()
+
+
+def test_create_support_case_args_rejects_empty_subject():
+    with pytest.raises(ValidationError):
+        CreateSupportCaseArgs(
+            subject="",
+            description="desc",
+            priority="low",
+            category="cat",
+        )
+
+
+def test_create_support_case_args_rejects_empty_description():
+    with pytest.raises(ValidationError):
+        CreateSupportCaseArgs(
+            subject="subj",
+            description="   ",
+            priority="low",
+            category="cat",
+        )
+
+
+def test_create_support_case_args_rejects_invalid_priority():
+    with pytest.raises(ValidationError):
+        CreateSupportCaseArgs(
+            subject="subj",
+            description="desc",
+            priority="critical",
+            category="cat",
+        )
+
+
+def test_create_support_case_args_strips_whitespace():
+    args = CreateSupportCaseArgs(
+        subject="  Login issue  ",
+        description="  Cannot log in  ",
+        priority="high",
+        category="  account  ",
+    )
+    assert args.subject == "Login issue"
+    assert args.description == "Cannot log in"
+    assert args.category == "account"
+    assert args.priority == "high"
+
+
+def test_create_support_case_args_rejects_overly_long_subject():
+    with pytest.raises(ValidationError):
+        CreateSupportCaseArgs(
+            subject="x" * 201,
+            description="desc",
+            priority="low",
+            category="cat",
+        )
+
+
+def test_create_support_case_registered():
+    assert "create_support_case" in TOOL_REGISTRY
+    args_schema, func = TOOL_REGISTRY["create_support_case"]
+    assert args_schema is CreateSupportCaseArgs
+    assert func is create_support_case
 
 
 def test_tools_are_read_only():

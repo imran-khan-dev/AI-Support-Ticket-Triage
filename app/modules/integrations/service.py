@@ -10,16 +10,18 @@ from app.core.security import (
     validate_token,
 )
 from app.database.db import Database
-from app.database.models import Integration, IntegrationCredential
+from app.database.models import Integration, IntegrationCredential, Tenant
 from app.database.repository import (
     create_integration,
     create_integration_credential,
     get_integration,
     get_integration_by_name,
     get_integration_credential_by_hash,
+    get_tenant,
     revoke_integration_credential,
     touch_integration_credential,
 )
+
 
 
 class IntegrationAuthError(RuntimeError):
