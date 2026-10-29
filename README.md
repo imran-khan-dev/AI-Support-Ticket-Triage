@@ -1,43 +1,72 @@
 # AI Support Ticket Triage Backend
 
-## Session history and memory
+FastAPI service that provides AI-assisted support ticket analysis and a tool-using agent with approval-gated consequential actions. Designed to be integrated by existing host applications.
 
-Conversation history is stored per session in PostgreSQL and replayed for later requests. Memories are stored per session, deduplicated by exact content, and recalled with full-text search. Recall is best-effort; storage failures do not abort an agent run.
+## Key capabilities
 
-Limits are configured through `AGENT_MAX_HISTORY_MESSAGES`, `AGENT_MAX_MEMORY_ITEMS`, and `AGENT_MAX_MEMORY_CHARS`.
+- `POST /api/v1/tickets/analyze` for ticket analysis.
+- `POST /api/v1/tickets/agent/run` for an authenticated, tenant-scoped, tool-using agent run.
+- DB-backed integration authentication with tenant context.
+- Persisted session history and memory with full-text recall.
+- Approval workflow for gated tools (`create_support_case` does not execute before approval).
+- Atomic action claiming, idempotency by request key, and audit persistence.
+- `SupportCaseAdapter` interface with `FakeSupportCaseAdapter` default and explicit adapter injection.
 
-## Approval workflow
+## Architecture and flow
 
-Gated tools are configured server-side in `GATED_TOOLS`. `execute_tool()` returns `approval_required` for those tools without invoking them.
+1. Host app authenticates with an integration bearer token; tenant context is derived from the verified credential.
+2. Agent run creates/resolves a tenant-scoped session, replays history/memory, runs the tool loop.
+3. Gated tool calls return `approval_required` instead of executing.
+4. An approver (bearer token + capability) approves/rejects the action.
+5. Approved actions are claimed atomically and executed via an explicitly injected adapter.
+6. Outcomes and audits are persisted; uncertain outcomes preserve the claim.
 
-`request_approval()` creates a pending action idempotently by `request_key`. Reusing a key with different tool or arguments raises a conflict. Approvers authenticate with a bearer token; only active approvers with the required capability may decide actions. Actions move from pending to approved/rejected, then to executed. Decisions and audit events are persisted atomically.
+## Stack
 
-## Execution safety
+FastAPI, Uvicorn, Pydantic Settings, OpenAI SDK (Groq-compatible), psycopg/psycopg-pool, pytest, httpx.
 
-Approved actions are claimed before execution using a conditional update. The claim prevents competing attempts from executing the same action. If the tool succeeds but final state/audit persistence fails, the claim is preserved and an uncertain outcome is reported. External tool side effects cannot be rolled back by database transactions. Abandoned claims after a process crash may require manual intervention.
-
-## Approval API
-
-Base path: `/api/v1/tickets/approvals`
-
-- `GET /actions` requires `X-Approver-Token`; capability `action.list`.
-- `POST /actions/{action_id}/decide` requires `X-Approver-Token`; capability `action.decide`; body `{"decision":"approved"|"rejected","reason":...}`.
-- `POST /actions/{action_id}/execute` requires `X-Approver-Token`; capability `action.execute`.
-
-Errors: 401 invalid/inactive token, 403 unauthorized, 409 invalid/conflicting/non-pending/uncertain execution, 503 storage unavailable.
-
-## Testing
-
-Run focused tests:
+## Setup
 
 ```powershell
-python -m pytest tests/test_approval_request_service.py tests/test_approval_decision_service.py tests/test_approval_execution_service.py tests/test_approval_api.py -q
+cd backend
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
 ```
 
-Run the full suite:
+Requires PostgreSQL. Tests use `ticket_triage_test`.
+
+## Environment variables
+
+- `DATABASE_URL` — PostgreSQL connection string (optional; storage endpoints return 503 if unset).
+- `APPROVER_TOKEN_SECRET` — secret for approver credentials (optional; required for approvals).
+- `GROQ_API_KEY`, `GROQ_MODEL`, `GROQ_BASE_URL` — optional; mock mode if unset.
+- `AGENT_MAX_HISTORY_MESSAGES` (default 20), `AGENT_MAX_MEMORY_ITEMS` (default 3), `AGENT_MAX_MEMORY_CHARS` (default 1200).
+- `TEST_DATABASE_URL` — override test database connection.
+
+## Run
 
 ```powershell
-python -m pytest -q
+uvicorn main:app --reload
 ```
 
-The suite uses the isolated PostgreSQL test database `ticket_triage_test`. Never run tests against production. Set `TEST_DATABASE_URL` to override the connection string.
+## Tests
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests/test_approval_execution_service.py tests/test_approval_api.py tests/test_approval_request_service.py tests/test_approval_decision_service.py tests/test_approver_policy.py tests/test_external_api_adapter.py tests/test_tools.py tests/test_integration_auth.py -v
+```
+
+## API
+
+Base: `POST /api/v1/tickets/agent/run` with `Authorization: Bearer <token>`.
+
+Request: `{"message": "...", "session_id": null}`.
+
+See `docs/API_INTEGRATION.md`.
+
+## Limitations
+
+- Mock mode when no Groq key is configured.
+- `FakeSupportCaseAdapter` is in-memory only.
+- No verified complete public-route end-to-end test for the approval execution flow.
+- Abandoned claims after crash may require manual intervention.
