@@ -140,21 +140,12 @@ def _match_query(query: str, text_fields: list[str]) -> bool:
 # ---------------------------------------------------------------------------
 
 def search_support_docs(args: SearchSupportDocsArgs) -> list[dict[str, Any]]:
-    query = args.query
-    results: list[dict[str, Any]] = []
-    for doc in _SUPPORT_DOCS:
-        if _match_query(
-            query,
-            [doc["title"], doc["content"]],
-        ):
-            results.append(
-                {
-                    "id": doc["id"],
-                    "title": doc["title"],
-                    "content": doc["content"],
-                }
-            )
-    return results
+    """Legacy support docs search (kept for approval test compatibility).
+
+    This tool is NOT in the active TOOL_REGISTRY. The LLM only sees
+    search_knowledge for support document retrieval.
+    """
+    return []
 
 
 def search_knowledge(
@@ -166,29 +157,29 @@ def search_knowledge(
     """Search the tenant's knowledge base using BM25 retrieval.
 
     Returns a list of relevant chunks with document name, content, and score.
-    Returns an empty list when no documents are found or on failure.
+    Returns an empty list when no documents are found.
+
+    Raises an exception on retrieval infrastructure or database failure,
+    which is caught by execute_tool and returned as a tool_failure error.
     """
     if tenant_id is None or db is None:
-        return []
+        raise RuntimeError("Missing tenant context for knowledge search.")
 
-    try:
-        from app.knowledge.service import KnowledgeService
+    from app.knowledge.service import KnowledgeService
 
-        service = KnowledgeService(db)
-        results = service.search(tenant_id, args.query, args.top_k)
+    service = KnowledgeService(db)
+    results = service.search(tenant_id, args.query, args.top_k)
 
-        return [
-            {
-                "chunk_id": r.chunk.id,
-                "document_name": r.chunk.metadata.get("filename", "unknown"),
-                "content": r.chunk.content,
-                "relevance_score": r.score,
-                "chunk_index": r.chunk.chunk_index,
-            }
-            for r in results
-        ]
-    except Exception:
-        return []
+    return [
+        {
+            "chunk_id": r.chunk.id,
+            "document_name": r.chunk.metadata.get("filename", "unknown"),
+            "content": r.chunk.content,
+            "relevance_score": r.score,
+            "chunk_index": r.chunk.chunk_index,
+        }
+        for r in results
+    ]
 
 
 def create_support_case(args: CreateSupportCaseArgs) -> list[dict[str, Any]]:

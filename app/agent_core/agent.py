@@ -101,6 +101,8 @@ def _build_tool_definitions() -> list[dict[str, Any]]:
     """
     definitions: list[dict[str, Any]] = []
     for tool_name, (args_schema, _func) in TOOL_REGISTRY.items():
+        if tool_name == "search_support_docs":
+            continue
         json_schema = args_schema.model_json_schema()
         parameters = _strip_titles(json_schema)
         parameters["additionalProperties"] = False
