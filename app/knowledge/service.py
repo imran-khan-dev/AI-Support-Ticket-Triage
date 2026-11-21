@@ -39,6 +39,8 @@ from retrieval_stack.dense.searcher import DenseSearcher
 from retrieval_stack.dense.index import VectorIndex
 from retrieval_stack.dense.embeddings import SentenceTransformerEmbedding
 from retrieval_stack.hybrid.searcher import HybridSearcher
+from retrieval_stack.reranking.reranker import Reranker
+from retrieval_stack.reranking.provider import SentenceTransformerCrossEncoder
 
 
 @dataclass(frozen=True)
@@ -66,6 +68,8 @@ class KnowledgeService:
         chunk_size: int = 512,
         chunk_overlap: int = 64,
         dense_model_name: str = "all-MiniLM-L6-v2",
+        reranker_model_name: str = "cross-encoder/ms-marco-MiniLM-L-6-v2",
+        enable_reranking: bool = False,
     ):
         self._db = db
         self._chunk_config = ChunkConfig(
@@ -78,7 +82,10 @@ class KnowledgeService:
         self._tokenizer = Tokenizer()
         self._scorer = BM25Scorer()
         self._dense_model_name = dense_model_name
+        self._reranker_model_name = reranker_model_name
+        self._enable_reranking = enable_reranking
         self._dense_embedder: SentenceTransformerEmbedding | None = None
+        self._reranker: Reranker | None = None
         self._indexes: dict[str, InvertedIndex] = {}
         self._searchers: dict[str, BM25Searcher] = {}
         self._dense_indexes: dict[str, VectorIndex] = {}
@@ -89,6 +96,12 @@ class KnowledgeService:
         if self._dense_embedder is None:
             self._dense_embedder = SentenceTransformerEmbedding(self._dense_model_name)
         return self._dense_embedder
+
+    def _get_reranker(self) -> Reranker:
+        if self._reranker is None:
+            provider = SentenceTransformerCrossEncoder(self._reranker_model_name)
+            self._reranker = Reranker(provider)
+        return self._reranker
 
     def _get_index(self, tenant_id: str) -> InvertedIndex:
         if tenant_id in self._indexes:
@@ -170,6 +183,48 @@ class KnowledgeService:
         self._dense_indexes.pop(tenant_id, None)
         self._dense_searchers.pop(tenant_id, None)
         self._hybrid_searchers.pop(tenant_id, None)
+
+    def _apply_reranking(
+        self,
+        tenant_id: str,
+        query: str,
+        results: list[SearchResult],
+        top_k: int,
+    ) -> list[SearchResult]:
+        """Apply cross-encoder reranking to search results."""
+        if not results:
+            return results
+
+        # Convert our SearchResult objects to objects with chunk attribute for the Reranker
+        class RerankCandidate:
+            def __init__(self, search_result: SearchResult):
+                self.chunk_id = search_result.chunk.id
+                self.chunk = RSChunk(
+                    id=search_result.chunk.id,
+                    document_id=search_result.chunk.document_id,
+                    index=search_result.chunk.chunk_index,
+                    content=search_result.chunk.content,
+                    token_count=search_result.chunk.token_count,
+                    metadata=search_result.chunk.metadata,
+                    start_char=search_result.chunk.start_char,
+                    end_char=search_result.chunk.end_char,
+                )
+                self.score = search_result.score
+
+        candidates = [RerankCandidate(r) for r in results]
+
+        reranker = self._get_reranker()
+        reranked_results = reranker.rerank(query, candidates, top_k=top_k)
+
+        # Convert back to SearchResult with reranked scores
+        final_results = []
+        for rr in reranked_results:
+            chunks = get_all_chunks_for_tenant(self._db, tenant_id)
+            chunk_map = {c.id: c for c in chunks}
+            if rr.chunk_id in chunk_map:
+                final_results.append(SearchResult(chunk=chunk_map[rr.chunk_id], score=rr.relevance_score))
+
+        return final_results
 
     def _ingest_bytes(self, file_content: bytes, filename: str, content_type: str) -> str:
         suffix = ".txt"
@@ -258,6 +313,7 @@ class KnowledgeService:
         tenant_id: str,
         query: str,
         top_k: int = 5,
+        rerank: bool = False,
     ) -> list[SearchResult]:
         """Search the tenant's knowledge base using BM25 retrieval."""
         searcher = self._get_searcher(tenant_id)
@@ -270,6 +326,9 @@ class KnowledgeService:
             if result.chunk_id in chunk_map:
                 search_results.append(SearchResult(chunk=chunk_map[result.chunk_id], score=result.score))
 
+        if rerank and self._enable_reranking:
+            search_results = self._apply_reranking(tenant_id, query, search_results, top_k)
+
         return search_results
 
     def search_dense(
@@ -277,6 +336,7 @@ class KnowledgeService:
         tenant_id: str,
         query: str,
         top_k: int = 5,
+        rerank: bool = False,
     ) -> list[SearchResult]:
         """Search the tenant's knowledge base using dense vector retrieval."""
         searcher = self._get_dense_searcher(tenant_id)
@@ -289,6 +349,9 @@ class KnowledgeService:
             if result.chunk_id in chunk_map:
                 search_results.append(SearchResult(chunk=chunk_map[result.chunk_id], score=result.score))
 
+        if rerank and self._enable_reranking:
+            search_results = self._apply_reranking(tenant_id, query, search_results, top_k)
+
         return search_results
 
     def search_hybrid(
@@ -296,6 +359,7 @@ class KnowledgeService:
         tenant_id: str,
         query: str,
         top_k: int = 5,
+        rerank: bool = False,
     ) -> list[SearchResult]:
         """Search the tenant's knowledge base using hybrid (BM25 + dense) retrieval with RRF."""
         searcher = self._get_hybrid_searcher(tenant_id)
@@ -307,6 +371,9 @@ class KnowledgeService:
             chunk_map = {c.id: c for c in chunks}
             if result.chunk_id in chunk_map:
                 search_results.append(SearchResult(chunk=chunk_map[result.chunk_id], score=result.rrf_score))
+
+        if rerank and self._enable_reranking:
+            search_results = self._apply_reranking(tenant_id, query, search_results, top_k)
 
         return search_results
 

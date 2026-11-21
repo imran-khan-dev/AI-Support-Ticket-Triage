@@ -21,6 +21,10 @@ class SearchKnowledgeArgs(BaseModel):
         default="bm25",
         description="Retrieval mode: 'bm25' for keyword search, 'dense' for semantic vector search, 'hybrid' for combined BM25 and dense with RRF.",
     )
+    rerank: bool = Field(
+        default=False,
+        description="Whether to apply cross-encoder reranking to improve relevance ordering. Requires reranking to be enabled in the knowledge service.",
+    )
 
     @field_validator("query", mode="before")
     @classmethod

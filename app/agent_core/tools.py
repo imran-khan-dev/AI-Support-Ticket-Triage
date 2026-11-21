@@ -169,11 +169,11 @@ def search_knowledge(
 
     service = KnowledgeService(db)
     if args.mode == "dense":
-        results = service.search_dense(tenant_id, args.query, args.top_k)
+        results = service.search_dense(tenant_id, args.query, args.top_k, rerank=args.rerank)
     elif args.mode == "hybrid":
-        results = service.search_hybrid(tenant_id, args.query, args.top_k)
+        results = service.search_hybrid(tenant_id, args.query, args.top_k, rerank=args.rerank)
     else:
-        results = service.search(tenant_id, args.query, args.top_k)
+        results = service.search(tenant_id, args.query, args.top_k, rerank=args.rerank)
 
     return [
         {

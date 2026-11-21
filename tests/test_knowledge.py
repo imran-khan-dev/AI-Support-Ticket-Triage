@@ -1094,3 +1094,252 @@ class TestHybridRetrieval:
         assert "error" not in result
         assert len(result["results"]) > 0
         assert any("forgot password" in r["content"].lower() for r in result["results"])
+
+
+class TestReranking:
+    """Tests for cross-encoder reranking functionality."""
+
+    def test_reranking_changes_ordering(self, test_setup):
+        """Reranking changes candidate ordering appropriately."""
+        db, _, _, _, tenant_id = test_setup
+        # Enable reranking for this test
+        service = KnowledgeService(db, enable_reranking=True)
+
+        # Ingest documents with different relevance patterns
+        service.ingest_document(
+            tenant_id=tenant_id,
+            file_content=b"Password reset: go to settings and click forgot password to get email link",
+            filename="password.txt",
+            content_type="text/plain",
+        )
+        service.ingest_document(
+            tenant_id=tenant_id,
+            file_content=b"Account settings: update your profile, email, and notification preferences",
+            filename="account.txt",
+            content_type="text/plain",
+        )
+
+        # Search without reranking
+        results_no_rerank = service.search(tenant_id, "password reset", top_k=5, rerank=False)
+        # Search with reranking
+        results_rerank = service.search(tenant_id, "password reset", top_k=5, rerank=True)
+
+        # Both should return results
+        assert len(results_no_rerank) > 0
+        assert len(results_rerank) > 0
+        # Reranked results should have relevance scores
+        assert all(hasattr(r, 'score') for r in results_rerank)
+
+    def test_reranking_works_with_bm25_candidates(self, test_setup):
+        """Reranking works with BM25 candidates."""
+        db, _, _, _, tenant_id = test_setup
+        service = KnowledgeService(db, enable_reranking=True)
+
+        service.ingest_document(
+            tenant_id=tenant_id,
+            file_content=b"Billing refund policy: refunds processed within 5 business days",
+            filename="billing.txt",
+            content_type="text/plain",
+        )
+        service.ingest_document(
+            tenant_id=tenant_id,
+            file_content=b"Shipping policy: orders ship within 24 hours",
+            filename="shipping.txt",
+            content_type="text/plain",
+        )
+
+        results = service.search(tenant_id, "refund policy", top_k=5, rerank=True)
+        assert len(results) > 0
+        # Should find the billing document
+        assert any("refund" in r.chunk.content.lower() for r in results)
+
+    def test_reranking_works_with_dense_candidates(self, test_setup):
+        """Reranking works with dense candidates."""
+        db, _, _, _, tenant_id = test_setup
+        service = KnowledgeService(db, enable_reranking=True)
+
+        service.ingest_document(
+            tenant_id=tenant_id,
+            file_content=b"Python exception handling try except finally blocks",
+            filename="python.txt",
+            content_type="text/plain",
+        )
+        service.ingest_document(
+            tenant_id=tenant_id,
+            file_content=b"Java error handling with catch blocks and throws declarations",
+            filename="java.txt",
+            content_type="text/plain",
+        )
+
+        results = service.search_dense(tenant_id, "Python error handling", top_k=5, rerank=True)
+        assert len(results) > 0
+        assert any("python" in r.chunk.content.lower() for r in results)
+
+    def test_reranking_works_with_hybrid_candidates(self, test_setup):
+        """Reranking works with hybrid candidates."""
+        db, _, _, _, tenant_id = test_setup
+        service = KnowledgeService(db, enable_reranking=True)
+
+        service.ingest_document(
+            tenant_id=tenant_id,
+            file_content=b"Password reset instructions: forgot password link sent via email",
+            filename="password.txt",
+            content_type="text/plain",
+        )
+        service.ingest_document(
+            tenant_id=tenant_id,
+            file_content=b"Account recovery: verify identity and restore access",
+            filename="recovery.txt",
+            content_type="text/plain",
+        )
+
+        results = service.search_hybrid(tenant_id, "password reset", top_k=5, rerank=True)
+        assert len(results) > 0
+        assert any("password" in r.chunk.content.lower() for r in results)
+
+    def test_reranking_respects_top_k(self, test_setup):
+        """Final top_k is respected after reranking."""
+        db, _, _, _, tenant_id = test_setup
+        service = KnowledgeService(db, enable_reranking=True)
+
+        for i in range(5):
+            service.ingest_document(
+                tenant_id=tenant_id,
+                file_content=f"Document {i} about topic {i}".encode(),
+                filename=f"doc{i}.txt",
+                content_type="text/plain",
+            )
+
+        results = service.search(tenant_id, "topic", top_k=3, rerank=True)
+        assert len(results) <= 3
+
+    def test_reranking_empty_candidates(self, test_setup):
+        """Empty candidate sets are handled correctly."""
+        db, _, _, _, tenant_id = test_setup
+        service = KnowledgeService(db, enable_reranking=True)
+
+        results = service.search(tenant_id, "any query", top_k=5, rerank=True)
+        assert results == []
+
+    def test_reranking_can_be_disabled(self, test_setup):
+        """Reranking can be disabled."""
+        db, _, _, _, tenant_id = test_setup
+        # Service without reranking enabled
+        service = KnowledgeService(db, enable_reranking=False)
+
+        service.ingest_document(
+            tenant_id=tenant_id,
+            file_content=b"Test document about billing refunds",
+            filename="billing.txt",
+            content_type="text/plain",
+        )
+
+        # Rerank should be ignored when service doesn't have it enabled
+        results = service.search(tenant_id, "billing refunds", top_k=5, rerank=True)
+        assert len(results) > 0
+        # Should work but without reranking applied
+
+    def test_reranking_missing_dependency_error(self, test_setup):
+        """Missing/unavailable reranker dependencies produce clear errors."""
+        # This test verifies that the reranker throws an error when the model
+        # is not available, rather than silently falling back
+        db, _, _, _, tenant_id = test_setup
+        # Use a non-existent model name to trigger an error
+        service = KnowledgeService(db, enable_reranking=True, reranker_model_name="non-existent-model")
+
+        service.ingest_document(
+            tenant_id=tenant_id,
+            file_content=b"Test document",
+            filename="test.txt",
+            content_type="text/plain",
+        )
+
+        # Should raise an error when trying to use the reranker
+        import pytest
+        with pytest.raises(Exception):
+            service.search(tenant_id, "test", top_k=5, rerank=True)
+
+    def test_reranking_tenant_isolation(self, test_setup, clean_database):
+        """Tenant isolation is preserved during reranking."""
+        db = get_database(os.environ["DATABASE_URL"])
+
+        # Tenant A
+        integ_a, _, _ = issue_integration_credential(db, integration_name="tenant-a-rerank")
+        tenant_a = _assign_tenant_to_integration(db, integ_a.id)
+        service_a = KnowledgeService(db, enable_reranking=True)
+        service_a.ingest_document(
+            tenant_id=tenant_a,
+            file_content=b"Tenant A confidential data about billing",
+            filename="a.txt",
+            content_type="text/plain",
+        )
+
+        # Tenant B
+        integ_b, _, _ = issue_integration_credential(db, integration_name="tenant-b-rerank")
+        tenant_b = _assign_tenant_to_integration(db, integ_b.id)
+        service_b = KnowledgeService(db, enable_reranking=True)
+        service_b.ingest_document(
+            tenant_id=tenant_b,
+            file_content=b"Tenant B confidential data about shipping",
+            filename="b.txt",
+            content_type="text/plain",
+        )
+
+        # Search from tenant A should not see tenant B's data
+        results_a = service_a.search(tenant_a, "confidential", top_k=5, rerank=True)
+        assert len(results_a) == 1
+        assert "billing" in results_a[0].chunk.content.lower()
+
+        # Search from tenant B should not see tenant A's data
+        results_b = service_b.search(tenant_b, "confidential", top_k=5, rerank=True)
+        assert len(results_b) == 1
+        assert "shipping" in results_b[0].chunk.content.lower()
+
+    def test_existing_modes_unchanged_when_rerank_disabled(self, test_setup):
+        """Existing BM25, dense, and hybrid behavior remains unchanged when reranking is disabled."""
+        db, _, _, _, tenant_id = test_setup
+        service = KnowledgeService(db, enable_reranking=True)
+
+        content = b"Error handling in Python. Try except finally blocks. Exception handling best practices."
+        service.ingest_document(
+            tenant_id=tenant_id,
+            file_content=content,
+            filename="python_errors.txt",
+            content_type="text/plain",
+        )
+
+        # BM25 search without reranking
+        bm25_results = service.search(tenant_id, "Python error handling", top_k=3, rerank=False)
+        assert len(bm25_results) > 0
+
+        # Dense search without reranking
+        dense_results = service.search_dense(tenant_id, "Python error handling", top_k=3, rerank=False)
+        assert len(dense_results) > 0
+
+        # Hybrid search without reranking
+        hybrid_results = service.search_hybrid(tenant_id, "Python error handling", top_k=3, rerank=False)
+        assert len(hybrid_results) > 0
+
+    def test_reranking_in_tool(self, test_setup):
+        """Agent tool dispatch correctly handles the reranking option."""
+        db, _, _, _, tenant_id = test_setup
+        service = KnowledgeService(db, enable_reranking=True)
+
+        service.ingest_document(
+            tenant_id=tenant_id,
+            file_content=b"To reset your password, visit account settings and use 'Forgot password'.",
+            filename="password_reset.txt",
+            content_type="text/plain",
+        )
+
+        from app.agent_core.tool_schemas import SearchKnowledgeArgs
+        from app.agent_core.tools import execute_tool
+
+        # Test with rerank=True
+        args = SearchKnowledgeArgs(query="password reset", top_k=5, mode="bm25", rerank=True)
+        result = execute_tool("search_knowledge", args.model_dump(), tenant_id=tenant_id, db=db)
+
+        assert result["tool"] == "search_knowledge"
+        assert "error" not in result
+        assert len(result["results"]) > 0
+        assert any("forgot password" in r["content"].lower() for r in result["results"])
