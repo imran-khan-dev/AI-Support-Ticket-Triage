@@ -17,9 +17,9 @@ class SearchKnowledgeArgs(BaseModel):
         ge=1,
         le=50,
     )
-    mode: Literal["bm25", "dense"] = Field(
+    mode: Literal["bm25", "dense", "hybrid"] = Field(
         default="bm25",
-        description="Retrieval mode: 'bm25' for keyword search, 'dense' for semantic vector search.",
+        description="Retrieval mode: 'bm25' for keyword search, 'dense' for semantic vector search, 'hybrid' for combined BM25 and dense with RRF.",
     )
 
     @field_validator("query", mode="before")

@@ -38,6 +38,7 @@ from retrieval_stack.bm25.scorer import BM25Scorer
 from retrieval_stack.dense.searcher import DenseSearcher
 from retrieval_stack.dense.index import VectorIndex
 from retrieval_stack.dense.embeddings import SentenceTransformerEmbedding
+from retrieval_stack.hybrid.searcher import HybridSearcher
 
 
 @dataclass(frozen=True)
@@ -82,6 +83,7 @@ class KnowledgeService:
         self._searchers: dict[str, BM25Searcher] = {}
         self._dense_indexes: dict[str, VectorIndex] = {}
         self._dense_searchers: dict[str, DenseSearcher] = {}
+        self._hybrid_searchers: dict[str, HybridSearcher] = {}
 
     def _get_dense_embedder(self) -> SentenceTransformerEmbedding:
         if self._dense_embedder is None:
@@ -152,11 +154,22 @@ class KnowledgeService:
         self._dense_searchers[tenant_id] = searcher
         return searcher
 
+    def _get_hybrid_searcher(self, tenant_id: str) -> HybridSearcher:
+        if tenant_id in self._hybrid_searchers:
+            return self._hybrid_searchers[tenant_id]
+
+        bm25_searcher = self._get_searcher(tenant_id)
+        dense_searcher = self._get_dense_searcher(tenant_id)
+        searcher = HybridSearcher(bm25_searcher, dense_searcher, rrf_k=60)
+        self._hybrid_searchers[tenant_id] = searcher
+        return searcher
+
     def invalidate_index(self, tenant_id: str) -> None:
         self._indexes.pop(tenant_id, None)
         self._searchers.pop(tenant_id, None)
         self._dense_indexes.pop(tenant_id, None)
         self._dense_searchers.pop(tenant_id, None)
+        self._hybrid_searchers.pop(tenant_id, None)
 
     def _ingest_bytes(self, file_content: bytes, filename: str, content_type: str) -> str:
         suffix = ".txt"
@@ -275,6 +288,25 @@ class KnowledgeService:
             chunk_map = {c.id: c for c in chunks}
             if result.chunk_id in chunk_map:
                 search_results.append(SearchResult(chunk=chunk_map[result.chunk_id], score=result.score))
+
+        return search_results
+
+    def search_hybrid(
+        self,
+        tenant_id: str,
+        query: str,
+        top_k: int = 5,
+    ) -> list[SearchResult]:
+        """Search the tenant's knowledge base using hybrid (BM25 + dense) retrieval with RRF."""
+        searcher = self._get_hybrid_searcher(tenant_id)
+        results = searcher.search(query, top_k=top_k)
+
+        search_results = []
+        for result in results:
+            chunks = get_all_chunks_for_tenant(self._db, tenant_id)
+            chunk_map = {c.id: c for c in chunks}
+            if result.chunk_id in chunk_map:
+                search_results.append(SearchResult(chunk=chunk_map[result.chunk_id], score=result.rrf_score))
 
         return search_results
 
