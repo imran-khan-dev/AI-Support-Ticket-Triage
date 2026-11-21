@@ -1222,7 +1222,7 @@ class TestReranking:
         assert results == []
 
     def test_reranking_can_be_disabled(self, test_setup):
-        """Reranking can be disabled."""
+        """Reranking can be disabled - requesting rerank when disabled raises error."""
         db, _, _, _, tenant_id = test_setup
         # Service without reranking enabled
         service = KnowledgeService(db, enable_reranking=False)
@@ -1234,10 +1234,14 @@ class TestReranking:
             content_type="text/plain",
         )
 
-        # Rerank should be ignored when service doesn't have it enabled
-        results = service.search(tenant_id, "billing refunds", top_k=5, rerank=True)
+        # Rerank should raise error when service doesn't have it enabled
+        import pytest
+        with pytest.raises(RuntimeError, match="Reranking requested but not enabled"):
+            service.search(tenant_id, "billing refunds", top_k=5, rerank=True)
+
+        # But normal search without rerank should still work
+        results = service.search(tenant_id, "billing refunds", top_k=5, rerank=False)
         assert len(results) > 0
-        # Should work but without reranking applied
 
     def test_reranking_missing_dependency_error(self, test_setup):
         """Missing/unavailable reranker dependencies produce clear errors."""
@@ -1311,35 +1315,76 @@ class TestReranking:
         # BM25 search without reranking
         bm25_results = service.search(tenant_id, "Python error handling", top_k=3, rerank=False)
         assert len(bm25_results) > 0
+        assert all(r.score_type == "bm25" for r in bm25_results)
 
         # Dense search without reranking
         dense_results = service.search_dense(tenant_id, "Python error handling", top_k=3, rerank=False)
         assert len(dense_results) > 0
+        assert all(r.score_type == "dense" for r in dense_results)
 
         # Hybrid search without reranking
         hybrid_results = service.search_hybrid(tenant_id, "Python error handling", top_k=3, rerank=False)
         assert len(hybrid_results) > 0
+        assert all(r.score_type == "hybrid" for r in hybrid_results)
 
-    def test_reranking_in_tool(self, test_setup):
-        """Agent tool dispatch correctly handles the reranking option."""
+    def test_score_type_identifies_reranked_results(self, test_setup):
+        """Reranked results have score_type='rerank', original retrieval scores preserved otherwise."""
         db, _, _, _, tenant_id = test_setup
         service = KnowledgeService(db, enable_reranking=True)
 
         service.ingest_document(
             tenant_id=tenant_id,
-            file_content=b"To reset your password, visit account settings and use 'Forgot password'.",
-            filename="password_reset.txt",
+            file_content=b"Password reset: go to settings and click forgot password to get email link",
+            filename="password.txt",
+            content_type="text/plain",
+        )
+        service.ingest_document(
+            tenant_id=tenant_id,
+            file_content=b"Account settings: update your profile, email, and notification preferences",
+            filename="account.txt",
             content_type="text/plain",
         )
 
-        from app.agent_core.tool_schemas import SearchKnowledgeArgs
-        from app.agent_core.tools import execute_tool
+        # Without reranking - should have original score types
+        results_no_rerank = service.search(tenant_id, "password reset", top_k=5, rerank=False)
+        assert all(r.score_type == "bm25" for r in results_no_rerank)
 
-        # Test with rerank=True
-        args = SearchKnowledgeArgs(query="password reset", top_k=5, mode="bm25", rerank=True)
-        result = execute_tool("search_knowledge", args.model_dump(), tenant_id=tenant_id, db=db)
+        # With reranking - should have score_type="rerank"
+        results_rerank = service.search(tenant_id, "password reset", top_k=5, rerank=True)
+        assert all(r.score_type == "rerank" for r in results_rerank)
 
-        assert result["tool"] == "search_knowledge"
-        assert "error" not in result
-        assert len(result["results"]) > 0
-        assert any("forgot password" in r["content"].lower() for r in result["results"])
+    def test_reranking_in_tool(self, test_setup):
+        """Agent tool dispatch correctly handles the reranking option."""
+        db, _, _, _, tenant_id = test_setup
+
+        # Configure tool to use a service with reranking enabled
+        from app.agent_core.tools import set_knowledge_service_factory
+        from app.knowledge.service import KnowledgeService
+        set_knowledge_service_factory(lambda db: KnowledgeService(db, enable_reranking=True))
+        try:
+            service = KnowledgeService(db, enable_reranking=True)
+
+            service.ingest_document(
+                tenant_id=tenant_id,
+                file_content=b"To reset your password, visit account settings and use 'Forgot password'.",
+                filename="password_reset.txt",
+                content_type="text/plain",
+            )
+
+            from app.agent_core.tool_schemas import SearchKnowledgeArgs
+            from app.agent_core.tools import execute_tool
+
+            # Test with rerank=True
+            args = SearchKnowledgeArgs(query="password reset", top_k=5, mode="bm25", rerank=True)
+            result = execute_tool("search_knowledge", args.model_dump(), tenant_id=tenant_id, db=db)
+
+            assert result["tool"] == "search_knowledge"
+            assert "error" not in result
+            assert len(result["results"]) > 0
+            assert any("forgot password" in r["content"].lower() for r in result["results"])
+            # Verify score_type is included
+            assert all("score_type" in r for r in result["results"])
+            assert all(r["score_type"] == "rerank" for r in result["results"])
+        finally:
+            # Reset factory
+            set_knowledge_service_factory(None)

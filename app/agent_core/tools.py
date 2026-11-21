@@ -22,6 +22,27 @@ from app.integrations.external_api import FakeSupportCaseAdapter, SupportCaseAda
 # Server-controlled default adapter (trusted configuration only)
 _DEFAULT_SUPPORT_CASE_ADAPTER: SupportCaseAdapter = FakeSupportCaseAdapter()
 
+# Knowledge service factory - can be overridden for testing or custom configuration
+_knowledge_service_factory = None
+
+
+def set_knowledge_service_factory(factory):
+    """Set a custom factory function for creating KnowledgeService instances.
+    
+    The factory should accept a Database and return a KnowledgeService.
+    Pass None to reset to default behavior.
+    """
+    global _knowledge_service_factory
+    _knowledge_service_factory = factory
+
+
+def get_knowledge_service(db):
+    """Get a KnowledgeService instance, using custom factory if set."""
+    if _knowledge_service_factory is not None:
+        return _knowledge_service_factory(db)
+    from app.knowledge.service import KnowledgeService
+    return KnowledgeService(db)
+
 
 def get_default_support_case_adapter() -> SupportCaseAdapter:
     """Return the default server-controlled adapter."""
@@ -165,9 +186,7 @@ def search_knowledge(
     if tenant_id is None or db is None:
         raise RuntimeError("Missing tenant context for knowledge search.")
 
-    from app.knowledge.service import KnowledgeService
-
-    service = KnowledgeService(db)
+    service = get_knowledge_service(db)
     if args.mode == "dense":
         results = service.search_dense(tenant_id, args.query, args.top_k, rerank=args.rerank)
     elif args.mode == "hybrid":
@@ -181,6 +200,7 @@ def search_knowledge(
             "document_name": r.chunk.metadata.get("filename", "unknown"),
             "content": r.chunk.content,
             "relevance_score": r.score,
+            "score_type": r.score_type,
             "chunk_index": r.chunk.chunk_index,
         }
         for r in results

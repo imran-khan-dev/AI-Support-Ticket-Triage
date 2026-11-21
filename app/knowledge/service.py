@@ -53,6 +53,7 @@ class IngestionResult:
 class SearchResult:
     chunk: KnowledgeChunk
     score: float
+    score_type: Literal["bm25", "dense", "hybrid", "rerank"] = "bm25"
 
 
 class KnowledgeService:
@@ -222,7 +223,7 @@ class KnowledgeService:
             chunks = get_all_chunks_for_tenant(self._db, tenant_id)
             chunk_map = {c.id: c for c in chunks}
             if rr.chunk_id in chunk_map:
-                final_results.append(SearchResult(chunk=chunk_map[rr.chunk_id], score=rr.relevance_score))
+                final_results.append(SearchResult(chunk=chunk_map[rr.chunk_id], score=rr.relevance_score, score_type="rerank"))
 
         return final_results
 
@@ -324,9 +325,11 @@ class KnowledgeService:
             chunks = get_all_chunks_for_tenant(self._db, tenant_id)
             chunk_map = {c.id: c for c in chunks}
             if result.chunk_id in chunk_map:
-                search_results.append(SearchResult(chunk=chunk_map[result.chunk_id], score=result.score))
+                search_results.append(SearchResult(chunk=chunk_map[result.chunk_id], score=result.score, score_type="bm25"))
 
-        if rerank and self._enable_reranking:
+        if rerank:
+            if not self._enable_reranking:
+                raise RuntimeError("Reranking requested but not enabled in KnowledgeService. Set enable_reranking=True.")
             search_results = self._apply_reranking(tenant_id, query, search_results, top_k)
 
         return search_results
@@ -347,9 +350,11 @@ class KnowledgeService:
             chunks = get_all_chunks_for_tenant(self._db, tenant_id)
             chunk_map = {c.id: c for c in chunks}
             if result.chunk_id in chunk_map:
-                search_results.append(SearchResult(chunk=chunk_map[result.chunk_id], score=result.score))
+                search_results.append(SearchResult(chunk=chunk_map[result.chunk_id], score=result.score, score_type="dense"))
 
-        if rerank and self._enable_reranking:
+        if rerank:
+            if not self._enable_reranking:
+                raise RuntimeError("Reranking requested but not enabled in KnowledgeService. Set enable_reranking=True.")
             search_results = self._apply_reranking(tenant_id, query, search_results, top_k)
 
         return search_results
@@ -370,9 +375,11 @@ class KnowledgeService:
             chunks = get_all_chunks_for_tenant(self._db, tenant_id)
             chunk_map = {c.id: c for c in chunks}
             if result.chunk_id in chunk_map:
-                search_results.append(SearchResult(chunk=chunk_map[result.chunk_id], score=result.rrf_score))
+                search_results.append(SearchResult(chunk=chunk_map[result.chunk_id], score=result.rrf_score, score_type="hybrid"))
 
-        if rerank and self._enable_reranking:
+        if rerank:
+            if not self._enable_reranking:
+                raise RuntimeError("Reranking requested but not enabled in KnowledgeService. Set enable_reranking=True.")
             search_results = self._apply_reranking(tenant_id, query, search_results, top_k)
 
         return search_results

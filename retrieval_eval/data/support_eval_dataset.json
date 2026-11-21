@@ -1,0 +1,141 @@
+{
+  "name": "support-kb-retrieval-eval",
+  "version": "1.0.0",
+  "description": "Synthetic support knowledge base retrieval evaluation dataset. Judgments are manually authored, not LLM-generated.",
+  "tenant_id": "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+  "k_values": [3, 5, 10],
+  "documents": [
+    {
+      "id": "D1",
+      "filename": "password_reset.txt",
+      "content_type": "text/plain",
+      "content": "To reset your password, go to account settings and click 'Forgot password'. A reset link will be sent to your email address. Follow the link in the email to create a new password and regain access to your account.",
+      "chunks": [
+        {
+          "logical_id": "C1",
+          "chunk_index": 0,
+          "content": "To reset your password, go to account settings and click 'Forgot password'.",
+          "metadata": {"section": "account", "topic": "password"}
+        },
+        {
+          "logical_id": "C2",
+          "chunk_index": 1,
+          "content": "A reset link will be sent to your email address. Follow the link in the email to create a new password and regain access to your account.",
+          "metadata": {"section": "email", "topic": "password"}
+        }
+      ]
+    },
+    {
+      "id": "D2",
+      "filename": "billing_refunds.txt",
+      "content_type": "text/plain",
+      "content": "Billing refunds are processed within 5 business days for eligible charges. Refunds are issued to the original payment method. Contact support if your refund has not arrived after 10 business days.",
+      "chunks": [
+        {
+          "logical_id": "C3",
+          "chunk_index": 0,
+          "content": "Billing refunds are processed within 5 business days for eligible charges.",
+          "metadata": {"section": "billing", "topic": "refunds"}
+        },
+        {
+          "logical_id": "C4",
+          "chunk_index": 1,
+          "content": "Refunds are issued to the original payment method. Contact support if your refund has not arrived after 10 business days.",
+          "metadata": {"section": "billing", "topic": "refunds"}
+        }
+      ]
+    },
+    {
+      "id": "D3",
+      "filename": "shipping_policy.txt",
+      "content_type": "text/plain",
+      "content": "Orders ship within 24 hours and tracking information is provided via email. Shipping is free for orders over $50. International shipping may take additional time.",
+      "chunks": [
+        {
+          "logical_id": "C5",
+          "chunk_index": 0,
+          "content": "Orders ship within 24 hours and tracking information is provided via email.",
+          "metadata": {"section": "shipping", "topic": "orders"}
+        },
+        {
+          "logical_id": "C6",
+          "chunk_index": 1,
+          "content": "Shipping is free for orders over $50. International shipping may take additional time.",
+          "metadata": {"section": "shipping", "topic": "orders"}
+        }
+      ]
+    },
+    {
+      "id": "D4",
+      "filename": "api_access.txt",
+      "content_type": "text/plain",
+      "content": "API access requires authentication with an API key. Rate limits are applied per API key to prevent abuse. You can view your rate limit usage in the developer dashboard.",
+      "chunks": [
+        {
+          "logical_id": "C7",
+          "chunk_index": 0,
+          "content": "API access requires authentication with an API key. Rate limits are applied per API key to prevent abuse.",
+          "metadata": {"section": "api", "topic": "authentication"}
+        },
+        {
+          "logical_id": "C8",
+          "chunk_index": 1,
+          "content": "You can view your rate limit usage in the developer dashboard.",
+          "metadata": {"section": "api", "topic": "dashboard"}
+        }
+      ]
+    },
+    {
+      "id": "D5",
+      "filename": "account_settings.txt",
+      "content_type": "text/plain",
+      "content": "Account settings let you update your profile, email address, and notification preferences. You can also change your password from the account settings page.",
+      "chunks": [
+        {
+          "logical_id": "C9",
+          "chunk_index": 0,
+          "content": "Account settings let you update your profile, email address, and notification preferences.",
+          "metadata": {"section": "account", "topic": "settings"}
+        },
+        {
+          "logical_id": "C10",
+          "chunk_index": 1,
+          "content": "You can also change your password from the account settings page.",
+          "metadata": {"section": "account", "topic": "password"}
+        }
+      ]
+    }
+  ],
+  "queries": [
+    {
+      "query_id": "q1",
+      "query_text": "How do I reset my password?",
+      "relevance_judgments": {"C1": 3, "C2": 2, "C10": 1}
+    },
+    {
+      "query_id": "q2",
+      "query_text": "billing refund processing time",
+      "relevance_judgments": {"C3": 3, "C4": 1}
+    },
+    {
+      "query_id": "q3",
+      "query_text": "track my shipment order",
+      "relevance_judgments": {"C5": 3, "C6": 1}
+    },
+    {
+      "query_id": "q4",
+      "query_text": "API rate limit authentication",
+      "relevance_judgments": {"C7": 3, "C8": 1}
+    },
+    {
+      "query_id": "q5",
+      "query_text": "update email notification preferences",
+      "relevance_judgments": {"C9": 3, "C1": 1}
+    },
+    {
+      "query_id": "q6",
+      "query_text": "reset link sent to email",
+      "relevance_judgments": {"C2": 3, "C1": 1}
+    }
+  ]
+}

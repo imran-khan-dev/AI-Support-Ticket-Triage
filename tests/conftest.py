@@ -16,10 +16,20 @@ its configuration).
 """
 
 import os
+import sys
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
 import pytest
+
+# Make the sibling Retrieval-Stack and Eval Harness packages importable from
+# the backend test suite (the application imports retrieval_stack at module
+# load time; the evaluation tool imports eval_harness).
+_BACKEND_ROOT = Path(__file__).resolve().parent.parent
+for _sub in ("Retrieval-Stack", "eval_harness"):
+    _path = _BACKEND_ROOT / _sub
+    if _path.is_dir() and str(_path) not in sys.path:
+        sys.path.insert(0, str(_path))
 
 #: Name of the database the suite is allowed to write to.
 TEST_DATABASE_NAME = "ticket_triage_test"
