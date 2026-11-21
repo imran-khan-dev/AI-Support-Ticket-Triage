@@ -224,7 +224,7 @@ def test_a_write_failure_is_logged_and_does_not_escape(database, caplog):
 
     with caplog.at_level(logging.ERROR, logger="agent.service"):
         with patch(
-            "app.modules.agent.service.append_memories",
+            "app.domain.agent.services.append_memories",
             side_effect=RuntimeError("storage is down"),
         ):
             stored = store_run_memory(
@@ -249,7 +249,7 @@ def test_a_failed_duplicate_check_is_logged_and_does_not_escape(
 
     with caplog.at_level(logging.ERROR, logger="agent.service"):
         with patch(
-            "app.modules.agent.service.find_memory_by_content",
+            "app.domain.agent.services.find_memory_by_content",
             side_effect=RuntimeError("storage is down"),
         ):
             stored = store_run_memory(

@@ -154,7 +154,7 @@ def search_knowledge(
     tenant_id: str | None = None,
     db: Any = None,
 ) -> list[dict[str, Any]]:
-    """Search the tenant's knowledge base using BM25 retrieval.
+    """Search the tenant's knowledge base using BM25 or dense retrieval.
 
     Returns a list of relevant chunks with document name, content, and score.
     Returns an empty list when no documents are found.
@@ -168,7 +168,10 @@ def search_knowledge(
     from app.knowledge.service import KnowledgeService
 
     service = KnowledgeService(db)
-    results = service.search(tenant_id, args.query, args.top_k)
+    if args.mode == "dense":
+        results = service.search_dense(tenant_id, args.query, args.top_k)
+    else:
+        results = service.search(tenant_id, args.query, args.top_k)
 
     return [
         {

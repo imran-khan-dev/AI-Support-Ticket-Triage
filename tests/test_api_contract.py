@@ -6,12 +6,18 @@ An extra field in a response body is a change to the contract, so it has to
 be made deliberately and documented, not slip in unnoticed.
 """
 
+import os
+import uuid
+from contextlib import contextmanager
 from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
 
 from app.agent_core.agent import AgentResult
+from app.database import get_database
+from app.database.repository import _canonical_uuid
+from app.modules.integrations.service import issue_integration_credential
 from main import app
 
 client = TestClient(app)
@@ -37,10 +43,35 @@ AGENT_FIELDS = {
 }
 
 
+def _issue_integration_auth_header(tenant_id=None):
+    db = get_database(os.environ["DATABASE_URL"])
+    integration, credential, token = issue_integration_credential(
+        db, integration_name=f"test-api-contract-{uuid.uuid4().hex[:8]}"
+    )
+    tid = tenant_id or str(uuid.uuid4())
+    with db.write_transaction() as conn:
+        conn.execute(
+            "INSERT INTO tenants (id, name, enabled) VALUES (%s, %s, TRUE) ON CONFLICT (id) DO NOTHING",
+            (_canonical_uuid(tid), f"api-contract-tenant-{tid[:8]}"),
+        )
+        conn.execute(
+            "UPDATE integrations SET tenant_id = %s WHERE id = %s",
+            (_canonical_uuid(tid), _canonical_uuid(integration.id)),
+        )
+    return {"Authorization": f"Bearer {token}"}, tid
+
+
+@contextmanager
+def _authenticated():
+    """Yield headers for an authenticated request."""
+    headers, _ = _issue_integration_auth_header()
+    yield headers
+
+
 @pytest.fixture()
 def agent_stub():
     """Replace the provider so that no request leaves the machine."""
-    with patch("app.modules.agent.route.run_agent") as mock_run:
+    with patch("app.modules.agent.service.run_agent") as mock_run:
         mock_run.return_value = AgentResult(
             status="success",
             answer="Done.",
@@ -99,10 +130,12 @@ def test_the_agent_endpoint_answers_with_exactly_the_documented_fields(
     database, agent_stub
 ):
     """The agent endpoint answers with the six agreed fields."""
-    response = client.post(
-        "/api/v1/tickets/agent/run",
-        json={"message": "I was charged twice."},
-    )
+    with _authenticated() as headers:
+        response = client.post(
+            "/api/v1/tickets/agent/run",
+            json={"message": "I was charged twice."},
+            headers=headers,
+        )
 
     assert response.status_code == 200
     assert set(response.json()) == AGENT_FIELDS
@@ -110,23 +143,27 @@ def test_the_agent_endpoint_answers_with_exactly_the_documented_fields(
 
 def test_the_agent_endpoint_rejects_a_blank_message():
     """A blank message is refused by the request schema."""
-    response = client.post(
-        "/api/v1/tickets/agent/run",
-        json={"message": "   "},
-    )
+    with _authenticated() as headers:
+        response = client.post(
+            "/api/v1/tickets/agent/run",
+            json={"message": "   "},
+            headers=headers,
+        )
 
     assert response.status_code == 422
 
 
 def test_the_agent_endpoint_reports_a_missing_session():
     """An unknown session id is refused instead of creating one."""
-    response = client.post(
-        "/api/v1/tickets/agent/run",
-        json={
-            "message": "I was charged twice.",
-            "session_id": "11111111-1111-4111-8111-111111111111",
-        },
-    )
+    with _authenticated() as headers:
+        response = client.post(
+            "/api/v1/tickets/agent/run",
+            json={
+                "message": "I was charged twice.",
+                "session_id": "11111111-1111-4111-8111-111111111111",
+            },
+            headers=headers,
+        )
 
     assert response.status_code == 404
     assert response.json() == {"detail": "The session does not exist."}
@@ -134,10 +171,12 @@ def test_the_agent_endpoint_reports_a_missing_session():
 
 def test_the_agent_endpoint_reports_a_malformed_session():
     """A session id that is not a UUID is refused."""
-    response = client.post(
-        "/api/v1/tickets/agent/run",
-        json={"message": "I was charged twice.", "session_id": "not-a-uuid"},
-    )
+    with _authenticated() as headers:
+        response = client.post(
+            "/api/v1/tickets/agent/run",
+            json={"message": "I was charged twice.", "session_id": "not-a-uuid"},
+            headers=headers,
+        )
 
     assert response.status_code == 422
     assert response.json() == {

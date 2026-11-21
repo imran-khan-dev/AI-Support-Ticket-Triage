@@ -1,4 +1,5 @@
 from pydantic import BaseModel, Field, field_validator
+from typing import Literal
 
 
 class SearchKnowledgeArgs(BaseModel):
@@ -15,6 +16,10 @@ class SearchKnowledgeArgs(BaseModel):
         description="Maximum number of results to return.",
         ge=1,
         le=50,
+    )
+    mode: Literal["bm25", "dense"] = Field(
+        default="bm25",
+        description="Retrieval mode: 'bm25' for keyword search, 'dense' for semantic vector search.",
     )
 
     @field_validator("query", mode="before")

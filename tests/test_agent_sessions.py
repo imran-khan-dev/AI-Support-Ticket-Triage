@@ -23,6 +23,7 @@ from app.database import (
     get_session,
     list_messages,
 )
+from app.database.repository import _canonical_uuid
 from main import app
 from app.database import get_database
 from app.modules.integrations.service import issue_integration_credential
@@ -32,7 +33,6 @@ def _issue_integration_auth_header(tenant_id=None):
     db = get_database(os.environ["DATABASE_URL"])
     integration, credential, token = issue_integration_credential(db, integration_name=f"test-agent-integ-{uuid.uuid4().hex[:8]}")
     tid = tenant_id or str(uuid.uuid4())
-    from app.database.repository import _canonical_uuid
     with db.write_transaction() as conn:
         conn.execute(
             "INSERT INTO tenants (id, name, enabled) VALUES (%s, %s, TRUE) ON CONFLICT (id) DO NOTHING",
@@ -238,7 +238,6 @@ def test_existing_session_id_is_reused(database):
 
     settings = _settings()
     with _route(settings) as (headers, tenant_id):
-        from app.database.repository import _canonical_uuid
         with database.write_transaction() as conn:
             conn.execute("UPDATE sessions SET tenant_id = %s WHERE id = %s", (_canonical_uuid(tenant_id), _canonical_uuid(existing.id)))
         with patch("app.modules.agent.service.run_agent") as mock_run:
@@ -264,7 +263,6 @@ def test_existing_session_id_is_reused(database):
 def test_transcript_accumulates_across_runs_in_one_session(database):
     """A second run continues the transcript of the same session."""
     existing = create_session(database)
-    from app.database.repository import _canonical_uuid
 
     settings = _settings()
     with _route(settings) as (headers, tenant_id):
@@ -302,7 +300,6 @@ def test_two_sessions_do_not_share_messages(database):
     """Messages written for one session are invisible to another."""
     first = create_session(database)
     second = create_session(database)
-    from app.database.repository import _canonical_uuid
 
     settings = _settings()
     with _route(settings) as (headers, tenant_id):
@@ -412,7 +409,6 @@ def test_rejected_session_id_creates_no_session(database):
 def test_stored_history_is_replayed_into_the_model(database):
     """A continuation run receives the earlier turns of its session."""
     existing = create_session(database)
-    from app.database.repository import _canonical_uuid
     append_messages(
         database,
         existing.id,
@@ -536,7 +532,6 @@ def test_max_iterations_reached_is_unchanged(database):
 
 @pytest.mark.usefixtures("clean_database")
 def test_agent_cross_tenant_session_denied(database):
-    from app.database.repository import _canonical_uuid
     session = create_session(database)
     other_tenant = str(uuid.uuid4())
     with database.write_transaction() as conn:
@@ -563,7 +558,6 @@ def test_agent_null_tenant_session_denied(database):
 def test_agent_forged_tenant_header_ignored(database):
     session = create_session(database)
     headers, tenant_id = _issue_integration_auth_header()
-    from app.database.repository import _canonical_uuid
     with database.write_transaction() as conn:
         conn.execute("UPDATE sessions SET tenant_id = %s WHERE id = %s", (_canonical_uuid(tenant_id), _canonical_uuid(session.id)))
     settings = _settings()

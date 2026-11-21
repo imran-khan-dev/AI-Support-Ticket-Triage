@@ -1,7 +1,7 @@
 """Knowledge base service layer.
 
-Wraps Retrieval Stack components (DocumentIngestor, ChunkingService, BM25Searcher)
-with strict tenant isolation. Each tenant gets its own in-memory BM25 index.
+Wraps Retrieval Stack components (DocumentIngestor, ChunkingService, BM25Searcher, DenseSearcher)
+with strict tenant isolation. Each tenant gets its own in-memory BM25 and dense vector indexes.
 """
 
 from __future__ import annotations
@@ -35,6 +35,9 @@ from retrieval_stack.bm25.searcher import BM25Searcher
 from retrieval_stack.bm25.index import InvertedIndex
 from retrieval_stack.bm25.tokenizer import Tokenizer
 from retrieval_stack.bm25.scorer import BM25Scorer
+from retrieval_stack.dense.searcher import DenseSearcher
+from retrieval_stack.dense.index import VectorIndex
+from retrieval_stack.dense.embeddings import SentenceTransformerEmbedding
 
 
 @dataclass(frozen=True)
@@ -52,11 +55,17 @@ class SearchResult:
 class KnowledgeService:
     """Tenant-isolated knowledge base service.
 
-    Each tenant has its own BM25 index built from their chunks.
+    Each tenant has its own BM25 index and dense vector index built from their chunks.
     Indexes are rebuilt on demand when chunks change.
     """
 
-    def __init__(self, db: Database, chunk_size: int = 512, chunk_overlap: int = 64):
+    def __init__(
+        self,
+        db: Database,
+        chunk_size: int = 512,
+        chunk_overlap: int = 64,
+        dense_model_name: str = "all-MiniLM-L6-v2",
+    ):
         self._db = db
         self._chunk_config = ChunkConfig(
             chunk_size=chunk_size,
@@ -67,8 +76,17 @@ class KnowledgeService:
         self._chunker = ChunkingService(self._chunk_config)
         self._tokenizer = Tokenizer()
         self._scorer = BM25Scorer()
+        self._dense_model_name = dense_model_name
+        self._dense_embedder: SentenceTransformerEmbedding | None = None
         self._indexes: dict[str, InvertedIndex] = {}
         self._searchers: dict[str, BM25Searcher] = {}
+        self._dense_indexes: dict[str, VectorIndex] = {}
+        self._dense_searchers: dict[str, DenseSearcher] = {}
+
+    def _get_dense_embedder(self) -> SentenceTransformerEmbedding:
+        if self._dense_embedder is None:
+            self._dense_embedder = SentenceTransformerEmbedding(self._dense_model_name)
+        return self._dense_embedder
 
     def _get_index(self, tenant_id: str) -> InvertedIndex:
         if tenant_id in self._indexes:
@@ -100,9 +118,45 @@ class KnowledgeService:
         self._searchers[tenant_id] = searcher
         return searcher
 
+    def _get_dense_index(self, tenant_id: str) -> VectorIndex:
+        if tenant_id in self._dense_indexes:
+            return self._dense_indexes[tenant_id]
+
+        index = VectorIndex()
+        chunks = get_all_chunks_for_tenant(self._db, tenant_id)
+        if chunks:
+            embedder = self._get_dense_embedder()
+            embeddings = embedder.embed_batch([chunk.content for chunk in chunks])
+            for chunk, embedding in zip(chunks, embeddings):
+                rs_chunk = RSChunk(
+                    id=chunk.id,
+                    document_id=chunk.document_id,
+                    index=chunk.chunk_index,
+                    content=chunk.content,
+                    token_count=chunk.token_count,
+                    metadata=chunk.metadata,
+                    start_char=chunk.start_char,
+                    end_char=chunk.end_char,
+                )
+                index.add(rs_chunk, embedding)
+        self._dense_indexes[tenant_id] = index
+        return index
+
+    def _get_dense_searcher(self, tenant_id: str) -> DenseSearcher:
+        if tenant_id in self._dense_searchers:
+            return self._dense_searchers[tenant_id]
+
+        index = self._get_dense_index(tenant_id)
+        embedder = self._get_dense_embedder()
+        searcher = DenseSearcher(index, embedder)
+        self._dense_searchers[tenant_id] = searcher
+        return searcher
+
     def invalidate_index(self, tenant_id: str) -> None:
         self._indexes.pop(tenant_id, None)
         self._searchers.pop(tenant_id, None)
+        self._dense_indexes.pop(tenant_id, None)
+        self._dense_searchers.pop(tenant_id, None)
 
     def _ingest_bytes(self, file_content: bytes, filename: str, content_type: str) -> str:
         suffix = ".txt"
@@ -192,7 +246,27 @@ class KnowledgeService:
         query: str,
         top_k: int = 5,
     ) -> list[SearchResult]:
+        """Search the tenant's knowledge base using BM25 retrieval."""
         searcher = self._get_searcher(tenant_id)
+        results = searcher.search(query, top_k=top_k)
+
+        search_results = []
+        for result in results:
+            chunks = get_all_chunks_for_tenant(self._db, tenant_id)
+            chunk_map = {c.id: c for c in chunks}
+            if result.chunk_id in chunk_map:
+                search_results.append(SearchResult(chunk=chunk_map[result.chunk_id], score=result.score))
+
+        return search_results
+
+    def search_dense(
+        self,
+        tenant_id: str,
+        query: str,
+        top_k: int = 5,
+    ) -> list[SearchResult]:
+        """Search the tenant's knowledge base using dense vector retrieval."""
+        searcher = self._get_dense_searcher(tenant_id)
         results = searcher.search(query, top_k=top_k)
 
         search_results = []

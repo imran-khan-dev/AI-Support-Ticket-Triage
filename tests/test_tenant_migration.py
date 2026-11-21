@@ -1,4 +1,4 @@
-﻿import os
+import os
 
 os.environ.setdefault("APPROVER_TOKEN_SECRET", "test-only-secret-for-approver-credentials-0123456789")
 
@@ -28,7 +28,7 @@ def _get(row, key, idx=0):
 @pytest.mark.usefixtures("clean_database")
 def test_migration_to_version_6(database):
     versions = [v for v, n, s in MIGRATIONS]
-    assert versions[-1] == 6
+    assert versions[-1] == 7
     with database.connection() as conn:
         assert current_version(conn) >= 6
     with database.connection() as conn:

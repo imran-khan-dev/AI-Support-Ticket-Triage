@@ -19,6 +19,7 @@ builds:
 """
 
 import json
+import uuid
 from types import SimpleNamespace
 
 import pytest
@@ -28,6 +29,29 @@ from app.agent_core.agent import AgentResult, MAX_ITERATIONS, run_agent
 from app.agent_core.tool_schemas import SearchSupportDocsArgs
 from app.agent_core.tools import TOOL_REGISTRY, execute_tool
 from app.core.config import Settings
+from app.database import get_database
+from app.knowledge.service import KnowledgeService
+from app.database.repository import _canonical_uuid
+
+
+def _create_test_tenant_with_knowledge(db):
+    """Create a test tenant and ingest a knowledge document about password reset."""
+    tenant_id = str(uuid.uuid4())
+    with db.write_transaction() as conn:
+        conn.execute(
+            "INSERT INTO tenants (id, name, enabled) VALUES (%s, %s, TRUE) ON CONFLICT (id) DO NOTHING",
+            (_canonical_uuid(tenant_id), f"test-tenant-{tenant_id[:8]}"),
+        )
+    # Ingest a document about password reset
+    service = KnowledgeService(db)
+    content = b"To reset your password, visit account settings and use 'Forgot password'. You will receive an email with a secure reset link."
+    service.ingest_document(
+        tenant_id=tenant_id,
+        file_content=content,
+        filename="password_reset.txt",
+        content_type="text/plain",
+    )
+    return tenant_id
 
 
 # ---------------------------------------------------------------------------
@@ -153,16 +177,18 @@ def _outputs_by_call_id(request_input):
 # ---------------------------------------------------------------------------
 
 
-def test_multiple_tool_calls_all_results_returned_to_model():
+def test_multiple_tool_calls_all_results_returned_to_model(clean_database):
     """Two tool calls in one response both execute and both results return."""
+    db = clean_database
+    tenant_id = _create_test_tenant_with_knowledge(db)
     client = _FakeClient(
         [
             _FakeResponse(
                 output=[
                     _SdkFunctionCall(
                         "call_1",
-                        "search_support_docs",
-                        '{"query": "password reset"}',
+                        "search_knowledge",
+                        '{"query": "password reset", "top_k": 5}',
                     ),
                     _SdkFunctionCall(
                         "call_2",
@@ -178,20 +204,27 @@ def test_multiple_tool_calls_all_results_returned_to_model():
         ]
     )
 
-    result = run_agent("Help me with my account.", _settings(), client)
+    result = run_agent("Help me with my account.", _settings(), client, tenant_id=tenant_id, db=db)
 
     assert result.status == "success"
     assert [call["call_id"] for call in result.tool_calls] == ["call_1", "call_2"]
     assert [call["tool"] for call in result.tool_calls] == [
-        "search_support_docs",
+        "search_knowledge",
         "lookup_ticket_history",
     ]
 
-    # Both tools executed; restricted tool is rejected as unknown/unavailable.
+    # Both tools executed; lookup_ticket_history is not registered (unknown_tool).
     docs_result = result.tool_calls[0]["result"]
     history_result = result.tool_calls[1]["result"]
     assert "error" not in docs_result
-    assert any(doc["id"] == "doc-001" for doc in docs_result["results"])
+    # Verify knowledge search returned results with expected structure
+    results = docs_result["results"]
+    assert len(results) >= 1
+    assert "chunk_id" in results[0]
+    assert "document_name" in results[0]
+    assert "content" in results[0]
+    assert "relevance_score" in results[0]
+    assert "Forgot password" in results[0]["content"]
     assert history_result.get("error") == "unknown_tool"
     assert history_result.get("results") == []
 
@@ -205,9 +238,9 @@ def test_multiple_tool_calls_all_results_returned_to_model():
     assert set(by_call_id) == {"call_1", "call_2"}
 
     docs_payload = json.loads(by_call_id["call_1"]["output"])
-    assert docs_payload["tool"] == "search_support_docs"
+    assert docs_payload["tool"] == "search_knowledge"
     assert docs_payload["count"] >= 1
-    assert by_call_id["call_1"]["name"] == "search_support_docs"
+    assert by_call_id["call_1"]["name"] == "search_knowledge"
 
     history_payload = json.loads(by_call_id["call_2"]["output"])
     assert history_payload["tool"] == "lookup_ticket_history"
@@ -715,7 +748,7 @@ def test_unregistered_tool_is_rejected_and_registry_is_unchanged():
 
 
 def test_agent_advertises_only_registered_tools():
-    """The tools sent to the model match the registry exactly."""
+    """The tools sent to the model match the LLM-visible tool definitions."""
     client = _FakeClient(
         [_FakeResponse(output=[_SdkMessage("Done.")], output_text="Done.")]
     )
@@ -725,15 +758,18 @@ def test_agent_advertises_only_registered_tools():
     tools = client.responses.calls[0]["tools"]
     advertised = [tool["name"] for tool in tools]
 
-    assert advertised == list(TOOL_REGISTRY)
-    assert set(advertised) == {"search_support_docs", "create_support_case"}
+    # The LLM only sees search_knowledge and create_support_case.
+    # search_support_docs is in TOOL_REGISTRY but intentionally not advertised.
+    assert advertised == ["search_knowledge", "create_support_case"]
+    assert set(advertised) == {"search_knowledge", "create_support_case"}
     for tool in tools:
         assert tool["type"] == "function"
         assert tool["name"]
         assert tool["description"]
         assert tool["parameters"]["type"] == "object"
-        if tool["name"] == "search_support_docs":
+        if tool["name"] == "search_knowledge":
             assert "query" in tool["parameters"]["properties"]
+            assert "top_k" in tool["parameters"]["properties"]
         elif tool["name"] == "create_support_case":
             assert "subject" in tool["parameters"]["properties"]
             assert "description" in tool["parameters"]["properties"]

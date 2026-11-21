@@ -15,15 +15,19 @@ network access.
 
 import json
 import os
+import uuid
 from contextlib import contextmanager
 from unittest.mock import patch
 
-import psycopg
+from app.errors.errors import StorageError
 import pytest
 from fastapi.testclient import TestClient
 
 from app.agent_core.agent import run_agent
+from app.database import get_database
+
 from app.core.config import DEFAULT_MAX_HISTORY_MESSAGES, Settings
+from app.modules.integrations.service import issue_integration_credential
 from app.domain.agent.history import load_history_items
 from app.database import (
     MessageDraft,
@@ -141,11 +145,36 @@ def _settings():
     )
 
 
+_AUTH_HEADERS = {}
+
+
+def _issue_auth():
+    global _AUTH_HEADERS
+    db = get_database(os.environ["DATABASE_URL"])
+    integration, credential, token = issue_integration_credential(
+        db, integration_name=f"test-agent-hist-{uuid.uuid4().hex[:8]}"
+    )
+    tid = str(uuid.uuid4())
+    from app.database.repository import _canonical_uuid
+    with db.write_transaction() as conn:
+        conn.execute(
+            "INSERT INTO tenants (id, name, enabled) VALUES (%s, %s, TRUE) ON CONFLICT (id) DO NOTHING",
+            (_canonical_uuid(tid), f"agent-tenant-{tid[:8]}"),
+        )
+        conn.execute(
+            "UPDATE integrations SET tenant_id = %s WHERE id = %s",
+            (_canonical_uuid(tid), _canonical_uuid(integration.id)),
+        )
+    _AUTH_HEADERS = {"Authorization": f"Bearer {token}"}
+    return _AUTH_HEADERS
+
+
 @contextmanager
 def _route(settings, groq_client=None):
     """Point the agent endpoint at a settings object and a provider."""
-    with patch("app.modules.agent.route.settings", settings):
-        with patch("app.modules.agent.route.groq_client", groq_client):
+    _issue_auth()
+    with patch("app.modules.agent.service.settings", settings):
+        with patch("app.modules.agent.service.groq_client", groq_client):
             yield
 
 
@@ -501,6 +530,7 @@ def _post(message, session_id=None):
     return api_client.post(
         "/api/v1/tickets/agent/run",
         json={"message": message, "session_id": session_id},
+        headers=_AUTH_HEADERS,
     )
 
 
@@ -710,8 +740,8 @@ def test_a_failing_history_read_answers_service_unavailable(database):
     fake_client = _FakeClient([_FakeResponse(output_text="The answer.")])
 
     with patch(
-        "app.modules.agent.service.load_history_items",
-        side_effect=psycopg.OperationalError("storage is down"),
+        "app.modules.agent.service.load_session_history",
+        side_effect=StorageError("storage is down"),
     ):
         with _route(_settings(), fake_client):
             response = _post("A question.")
