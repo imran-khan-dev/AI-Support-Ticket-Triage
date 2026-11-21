@@ -361,6 +361,50 @@ CREATE INDEX idx_sessions_tenant_id ON sessions (tenant_id);
 CREATE INDEX idx_actions_tenant_id ON actions (tenant_id);
 """
 
+# ---------------------------------------------------------------------------
+# Migration 7: knowledge base foundation
+# ---------------------------------------------------------------------------
+#
+# knowledge_documents stores uploaded documents with tenant isolation.
+# knowledge_chunks stores document chunks with BM25-ready text content.
+# Both tables enforce tenant_id for strict tenant isolation.
+#
+MIGRATION_7 = """
+CREATE TABLE knowledge_documents (
+    id              UUID PRIMARY KEY,
+    tenant_id       UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    filename        TEXT NOT NULL,
+    content_type    TEXT NOT NULL,
+    byte_size       BIGINT NOT NULL,
+    checksum        TEXT NOT NULL,
+    status          TEXT NOT NULL DEFAULT 'pending',
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    completed_at    TIMESTAMPTZ,
+    error_message   TEXT,
+    CONSTRAINT knowledge_documents_status_check
+        CHECK (status IN ('pending', 'processing', 'completed', 'failed'))
+);
+
+CREATE TABLE knowledge_chunks (
+    id              UUID PRIMARY KEY,
+    tenant_id       UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    document_id     UUID NOT NULL REFERENCES knowledge_documents(id) ON DELETE CASCADE,
+    chunk_index     INTEGER NOT NULL,
+    content         TEXT NOT NULL,
+    token_count     INTEGER NOT NULL,
+    start_char      INTEGER NOT NULL,
+    end_char        INTEGER NOT NULL,
+    metadata        JSONB NOT NULL DEFAULT '{}',
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_knowledge_documents_tenant ON knowledge_documents (tenant_id);
+CREATE INDEX idx_knowledge_documents_status ON knowledge_documents (tenant_id, status);
+CREATE INDEX idx_knowledge_chunks_tenant ON knowledge_chunks (tenant_id);
+CREATE INDEX idx_knowledge_chunks_document ON knowledge_chunks (document_id, chunk_index);
+"""
+
 # Ordered list of (version, name, sql) triples. Never edit an applied
 # migration; append a new numbered entry instead.
 MIGRATIONS: list[tuple[int, str, str]] = [
@@ -370,4 +414,5 @@ MIGRATIONS: list[tuple[int, str, str]] = [
     (4, "approver_credential_uniqueness", MIGRATION_4),
     (5, "integration_identity_and_credentials", MIGRATION_5),
     (6, "tenant_isolation_schema", MIGRATION_6),
+    (7, "knowledge_base_foundation", MIGRATION_7),
 ]

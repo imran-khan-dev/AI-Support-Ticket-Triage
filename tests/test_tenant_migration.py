@@ -26,25 +26,56 @@ def _get(row, key, idx=0):
 
 
 @pytest.mark.usefixtures("clean_database")
-def test_migration_to_version_6(database):
+def test_migration_to_version_7(database):
     versions = [v for v, n, s in MIGRATIONS]
-    assert versions[-1] == 6
+    assert versions[-1] == 7
     with database.connection() as conn:
-        assert current_version(conn) >= 6
+        assert current_version(conn) >= 7
+    # Check tenants table exists (from migration 6)
     with database.connection() as conn:
         row = conn.execute("SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = %s)", ('tenants',)).fetchone()
         exists = _get(row, 'exists', 0)
         assert exists
+    # Check tenant_id columns exist (from migration 6)
     with database.connection() as conn:
         cols = conn.execute("SELECT column_name, is_nullable FROM information_schema.columns WHERE table_name IN ('integrations','sessions','actions') AND column_name = %s", ('tenant_id',)).fetchall()
         assert len(cols) == 3
         for c in cols:
             nullable = _get(c, 'is_nullable', 1)
             assert nullable == 'YES'
+    # Check knowledge base tables exist (from migration 7)
     with database.connection() as conn:
-        cnt = conn.execute("SELECT COUNT(*) as c FROM sessions WHERE tenant_id IS NULL").fetchone()
-        c = _get(cnt, 'c', 0)
-        assert c >= 0
+        row = conn.execute("SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = %s)", ('knowledge_documents',)).fetchone()
+        exists = _get(row, 'exists', 0)
+        assert exists
+        row = conn.execute("SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = %s)", ('knowledge_chunks',)).fetchone()
+        exists = _get(row, 'exists', 0)
+        assert exists
+    # Check knowledge tables have tenant_id
+    with database.connection() as conn:
+        cols = conn.execute("SELECT column_name, is_nullable FROM information_schema.columns WHERE table_name IN ('knowledge_documents','knowledge_chunks') AND column_name = %s", ('tenant_id',)).fetchall()
+        assert len(cols) == 2
+        for c in cols:
+            nullable = _get(c, 'is_nullable', 1)
+            assert nullable == 'NO'  # tenant_id is NOT NULL for knowledge tables
+    # Check FKs and indexes on knowledge tables
+    with database.connection() as conn:
+        fks = conn.execute("""
+            SELECT conname
+            FROM pg_constraint c
+            JOIN pg_class t ON t.oid = c.conrelid
+            WHERE t.relname IN ('knowledge_documents','knowledge_chunks')
+              AND c.contype = 'f'
+              AND conname LIKE '%tenant%'
+        """).fetchall()
+        assert len(fks) >= 2
+        idxs = conn.execute("""
+            SELECT indexname
+            FROM pg_indexes
+            WHERE tablename IN ('knowledge_documents','knowledge_chunks')
+              AND indexname LIKE '%tenant%'
+        """).fetchall()
+        assert len(idxs) >= 2
 
 
 @pytest.mark.usefixtures("clean_database")

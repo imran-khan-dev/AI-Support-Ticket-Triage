@@ -8,7 +8,7 @@ that a stolen database alone cannot be used to test a guess.
 The digest is keyed with a server side secret, the pepper, that lives in
 the configuration and not in the database. Two consequences follow:
 
-* a credential cannot be recovered from the database, because the pepper is
+* a credential cannot be re covered from the database, because the pepper is
   needed to compute a digest of a guess;
 * the digest of a credential is the same every time, so the approver of a
   presented credential can be found with a lookup on the digest.
