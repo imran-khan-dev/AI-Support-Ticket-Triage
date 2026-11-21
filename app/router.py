@@ -4,6 +4,7 @@ from app.modules.agent.route import router as AgentRoutes
 from app.modules.analyze.route import router as AnalyzeRoutes
 from app.modules.approvals.route import router as ApprovalsRoutes
 from app.modules.integrations.route import router as IntegrationsRoutes
+from app.modules.knowledge.route import router as KnowledgeRoutes
 
 router = APIRouter()
 
@@ -23,6 +24,10 @@ module_routes = [
     {
         "path": "/integrations",
         "route": IntegrationsRoutes,
+    },
+    {
+        "path": "/knowledge",
+        "route": KnowledgeRoutes,
     },
 ]
 

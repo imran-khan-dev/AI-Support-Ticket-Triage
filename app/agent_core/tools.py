@@ -7,11 +7,13 @@ by default. An explicit registry maps tool names to their argument schemas and
 callables, and a central execute_tool function validates and dispatches calls safely.
 """
 
+import inspect
 from typing import Any
 
 from app.agent_core.tool_schemas import (
     CreateSupportCaseArgs,
     LookupTicketHistoryArgs,
+    SearchKnowledgeArgs,
     SearchSupportDocsArgs,
 )
 from app.integrations.external_api import FakeSupportCaseAdapter, SupportCaseAdapter
@@ -124,11 +126,6 @@ _TICKET_HISTORY = [
 
 
 def _match_query(query: str, text_fields: list[str]) -> bool:
-    """Return True if any whole word in the query appears in any text field.
-
-    Simple, deterministic, case-insensitive whole-word matching. No external
-    dependencies, no embeddings, no vector search.
-    """
     query_lower = query.lower()
     query_words = [word for word in query_lower.split() if word]
     if not query_words:
@@ -142,13 +139,7 @@ def _match_query(query: str, text_fields: list[str]) -> bool:
 # Tool implementations
 # ---------------------------------------------------------------------------
 
-
 def search_support_docs(args: SearchSupportDocsArgs) -> list[dict[str, Any]]:
-    """Search fictional support documentation for documents matching the query.
-
-    Returns a list of documents with id, title, and content. Returns an empty
-    list when no documents match.
-    """
     query = args.query
     results: list[dict[str, Any]] = []
     for doc in _SUPPORT_DOCS:
@@ -166,24 +157,46 @@ def search_support_docs(args: SearchSupportDocsArgs) -> list[dict[str, Any]]:
     return results
 
 
-def create_support_case(args: CreateSupportCaseArgs) -> list[dict[str, Any]]:
-    """Create a support case via an external integration.
+def search_knowledge(
+    args: SearchKnowledgeArgs,
+    *,
+    tenant_id: str | None = None,
+    db: Any = None,
+) -> list[dict[str, Any]]:
+    """Search the tenant's knowledge base using BM25 retrieval.
 
-    This action is consequential and requires approval. The execution is
-    performed by the approval execution service using an injected adapter.
+    Returns a list of relevant chunks with document name, content, and score.
+    Returns an empty list when no documents are found or on failure.
     """
-    # When called directly outside approved execution, use default adapter
-    # but this path is still gated by execute_tool approval_required.
+    if tenant_id is None or db is None:
+        return []
+
+    try:
+        from app.knowledge.service import KnowledgeService
+
+        service = KnowledgeService(db)
+        results = service.search(tenant_id, args.query, args.top_k)
+
+        return [
+            {
+                "chunk_id": r.chunk.id,
+                "document_name": r.chunk.metadata.get("filename", "unknown"),
+                "content": r.chunk.content,
+                "relevance_score": r.score,
+                "chunk_index": r.chunk.chunk_index,
+            }
+            for r in results
+        ]
+    except Exception:
+        return []
+
+
+def create_support_case(args: CreateSupportCaseArgs) -> list[dict[str, Any]]:
     result = get_support_case_adapter().create_support_case(args)
     return [result]
 
 
 def lookup_ticket_history(args: LookupTicketHistoryArgs) -> list[dict[str, Any]]:
-    """Look up fictional ticket history records matching the query.
-
-    Ticket history lookup is disabled while ticket ownership is unverified.
-    This function is not exposed via the tool registry and must not be called.
-    """
     return []
 
 
@@ -191,31 +204,22 @@ def lookup_ticket_history(args: LookupTicketHistoryArgs) -> list[dict[str, Any]]
 # Tool registry and central execution
 # ---------------------------------------------------------------------------
 
-# Server-controlled set of tools that require approval before execution.
-# Trusted configuration only; never derived from model arguments or client claims.
 GATED_TOOLS: frozenset[str] = frozenset({"create_support_case"})
 
-# Explicit registry: tool name -> (argument schema, callable).
-# This is the single place where tools are registered. Adding a new tool
-# requires adding an entry here plus its implementation function above.
 TOOL_REGISTRY: dict[str, tuple[type[Any], Any]] = {
     "search_support_docs": (SearchSupportDocsArgs, search_support_docs),
+    "search_knowledge": (SearchKnowledgeArgs, search_knowledge),
     "create_support_case": (CreateSupportCaseArgs, create_support_case),
 }
 
 
-def execute_tool(tool_name: str, raw_arguments: dict[str, Any]) -> dict[str, Any]:
-    """Execute a registered tool by name with validated arguments.
-
-    Steps:
-    1. Reject unknown tool names.
-    2. Validate arguments with the tool's Pydantic schema.
-    3. Execute only the registered function.
-    4. Return a predictable structured result.
-
-    Errors are handled safely: invalid arguments and tool failures do not
-    expose internal details to the caller.
-    """
+def execute_tool(
+    tool_name: str,
+    raw_arguments: dict[str, Any],
+    *,
+    tenant_id: str | None = None,
+    db: Any = None,
+) -> dict[str, Any]:
     if tool_name not in TOOL_REGISTRY:
         return {
             "tool": tool_name,
@@ -234,7 +238,6 @@ def execute_tool(tool_name: str, raw_arguments: dict[str, Any]) -> dict[str, Any
 
     args_schema, func = TOOL_REGISTRY[tool_name]
 
-    # Validate arguments; invalid arguments do not execute the tool.
     try:
         validated_args = args_schema(**raw_arguments)
     except Exception:
@@ -245,9 +248,14 @@ def execute_tool(tool_name: str, raw_arguments: dict[str, Any]) -> dict[str, Any
             "results": [],
         }
 
-    # Execute only the registered function.
     try:
-        results = func(validated_args)
+        sig = inspect.signature(func)
+        kwargs = {}
+        if "tenant_id" in sig.parameters:
+            kwargs["tenant_id"] = tenant_id
+        if "db" in sig.parameters:
+            kwargs["db"] = db
+        results = func(validated_args, **kwargs)
     except Exception:
         return {
             "tool": tool_name,

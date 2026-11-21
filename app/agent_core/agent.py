@@ -133,8 +133,9 @@ def _get_system_prompt() -> str:
         "customer support tickets by gathering evidence using the available "
         "tools, then providing a final answer.\n\n"
         "Available tools:\n"
-        "- search_support_docs: search support documentation for answers to "
-        "common questions about password resets, billing, login, and more.\n"
+        "- search_knowledge: search the authenticated tenant's support "
+        "documentation for answers to common questions about password resets, "
+        "billing, login, and more.\n"
         "- create_support_case: create a support case for consequential actions "
         "(requires approval).\n\n"
         "Rules:\n"
@@ -179,6 +180,8 @@ def run_agent(
     client: OpenAI | None = None,
     max_iterations: int = MAX_ITERATIONS,
     history: list[dict[str, Any]] | None = None,
+    tenant_id: str | None = None,
+    db: Any = None,
 ) -> AgentResult:
     """Run the support agent loop.
 
@@ -301,7 +304,7 @@ def run_agent(
 
                 # Execute through the registry dispatcher. Unknown tool names
                 # and invalid arguments are handled safely inside execute_tool.
-                result = execute_tool(tool_name or "", arguments)
+                result = execute_tool(tool_name or "", arguments, tenant_id=tenant_id, db=db)
 
                 tool_calls_record.append(
                     {

@@ -1,6 +1,30 @@
 from pydantic import BaseModel, Field, field_validator
 
 
+class SearchKnowledgeArgs(BaseModel):
+    """Arguments for searching the tenant's knowledge base."""
+    query: str = Field(
+        ...,
+        description="The search query to match against the tenant's support documentation.",
+        min_length=1,
+        max_length=500,
+        examples=["password reset", "billing refund", "login troubleshooting"],
+    )
+    top_k: int = Field(
+        default=5,
+        description="Maximum number of results to return.",
+        ge=1,
+        le=50,
+    )
+
+    @field_validator("query", mode="before")
+    @classmethod
+    def strip_query(cls, value: str) -> str:
+        if isinstance(value, str):
+            return value.strip()
+        return value
+
+
 class SearchSupportDocsArgs(BaseModel):
     """Arguments for searching support documentation."""
 
