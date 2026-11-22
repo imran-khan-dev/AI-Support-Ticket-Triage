@@ -9,3 +9,4 @@ psycopg-pool
 pymupdf
 tiktoken
 sentence-transformers
+jsonschema>=4.0

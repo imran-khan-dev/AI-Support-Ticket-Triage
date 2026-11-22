@@ -223,7 +223,7 @@ def test_second_call_includes_assistant_tool_call_before_output():
         tool_call_item = tool_call_items[0]
         assert tool_call_item["call_id"] == "fc_7d1a2b6a-148a-4af2-a639-91dccf9110d2"
         assert tool_call_item["name"] == "search_knowledge"
-        assert tool_call_item["arguments"] == '{"query":"login troubleshooting"}'
+        assert tool_call_item["arguments"] == '{"query": "login troubleshooting"}'
 
         # The tool output must follow the tool call.
         assert len(output_items) == 1

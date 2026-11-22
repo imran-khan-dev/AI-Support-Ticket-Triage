@@ -16,7 +16,7 @@ from app.agent_core.tool_schemas import (
     CreateSupportCaseArgs,
     SearchKnowledgeArgs,
 )
-from app.agent_core.tools import TOOL_REGISTRY
+from app.agent_core.tools import GATED_TOOLS, TOOL_REGISTRY
 
 from agent_orchestrator.tools.executor import ToolExecutor
 from agent_orchestrator.tools.models import ToolCall
@@ -37,7 +37,10 @@ def test_all_active_tools_are_registered():
         tenant_id="tenant-1", db=object()
     )
     names = {d.name for d in registry.list_tools()}
-    assert names == set(orchestrator_tools.ACTIVE_TOOL_NAMES)
+    # Every registered application tool is executable, and the advertised
+    # subset (shown to the model) is a strict subset.
+    assert set(orchestrator_tools.REGISTERED_TOOL_NAMES) == names
+    assert set(orchestrator_tools.ADVERTISED_TOOL_NAMES) <= names
     assert "search_knowledge" in names
     assert "create_support_case" in names
 
@@ -74,9 +77,10 @@ def test_build_tool_executor_returns_tool_executor():
 def test_handler_dispatch_delegates_to_execute_tool():
     captured = {}
 
-    def fake_execute_tool(name, raw_arguments, *, tenant_id=None, db=None):
+    def fake_execute_tool(name, raw_arguments, *, tenant_id=None, db=None, is_approved=False):
         captured.update(
-            name=name, arguments=raw_arguments, tenant_id=tenant_id, db=db
+            name=name, arguments=raw_arguments, tenant_id=tenant_id, db=db,
+            is_approved=is_approved,
         )
         return {"tool": name, "results": [], "count": 0}
 
@@ -95,12 +99,13 @@ def test_handler_dispatch_delegates_to_execute_tool():
     assert captured["arguments"] == {"query": "password reset"}
     assert captured["tenant_id"] == "trusted-tenant"
     assert captured["db"] == "trusted-db"
+    assert captured["is_approved"] is False
 
 
 def test_tenant_context_injected_from_trusted_dependency():
     captured = {}
 
-    def fake_execute_tool(name, raw_arguments, *, tenant_id=None, db=None):
+    def fake_execute_tool(name, raw_arguments, *, tenant_id=None, db=None, is_approved=False):
         captured["tenant_id"] = tenant_id
         return {"tool": name, "results": [], "count": 0}
 
@@ -145,7 +150,7 @@ def test_handler_strips_tenant_id_defense_in_depth():
     # model-supplied tenant_id to execute_tool.
     captured = {}
 
-    def fake_execute_tool(name, raw_arguments, *, tenant_id=None, db=None):
+    def fake_execute_tool(name, raw_arguments, *, tenant_id=None, db=None, is_approved=False):
         captured["tenant_id"] = tenant_id
         captured["arguments"] = raw_arguments
         return {"tool": name, "results": [], "count": 0}
@@ -168,11 +173,23 @@ def test_handler_strips_tenant_id_defense_in_depth():
 
 
 def test_create_support_case_unapproved_returns_refusal_without_execution():
-    executed = []
+    captured = {}
 
-    def fake_execute_tool(name, raw_arguments, *, tenant_id=None, db=None):
+    def fake_execute_tool(name, raw_arguments, *, tenant_id=None, db=None, is_approved=False):
+        captured["is_approved"] = is_approved
+        captured["name"] = name
+        # Mimic execute_tool's approval gating: gated tools refuse when not approved.
+        if name in GATED_TOOLS and not is_approved:
+            return {
+                "tool": name,
+                "error": "approval_required",
+                "message": f"Tool '{name}' requires approval and is not executed.",
+                "results": [],
+            }
         executed.append(name)
         return {"tool": name, "results": [], "count": 0}
+
+    executed = []
 
     with patch.object(orchestrator_tools, "execute_tool", side_effect=fake_execute_tool):
         registry = orchestrator_tools.build_tool_registry(
@@ -191,7 +208,9 @@ def test_create_support_case_unapproved_returns_refusal_without_execution():
             )
         )
 
-    assert executed == []  # execute_tool was never called
+    assert executed == []  # no case was created
+    assert captured["is_approved"] is False
+    assert captured["name"] == "create_support_case"
     assert result.success is True
     assert result.output["error"] == "approval_required"
     assert result.output["results"] == []
@@ -200,8 +219,9 @@ def test_create_support_case_unapproved_returns_refusal_without_execution():
 def test_create_support_case_approved_delegates_to_execute_tool():
     captured = {}
 
-    def fake_execute_tool(name, raw_arguments, *, tenant_id=None, db=None):
+    def fake_execute_tool(name, raw_arguments, *, tenant_id=None, db=None, is_approved=False):
         captured["name"] = name
+        captured["is_approved"] = is_approved
         return {"tool": name, "results": [], "count": 0}
 
     with patch.object(orchestrator_tools, "execute_tool", side_effect=fake_execute_tool):
@@ -222,6 +242,7 @@ def test_create_support_case_approved_delegates_to_execute_tool():
         )
 
     assert captured["name"] == "create_support_case"
+    assert captured["is_approved"] is True
 
 
 # ---------------------------------------------------------------------------
@@ -296,7 +317,7 @@ def test_invalid_arguments_return_safe_failure():
 
 
 def test_handler_exception_is_captured_as_failed_tool_result():
-    def raising_execute_tool(name, raw_arguments, *, tenant_id=None, db=None):
+    def raising_execute_tool(name, raw_arguments, *, tenant_id=None, db=None, is_approved=False):
         raise RuntimeError("knowledge base unavailable")
 
     with patch.object(

@@ -235,6 +235,7 @@ def execute_tool(
     *,
     tenant_id: str | None = None,
     db: Any = None,
+    is_approved: bool = False,
 ) -> dict[str, Any]:
     if tool_name not in TOOL_REGISTRY:
         return {
@@ -244,7 +245,9 @@ def execute_tool(
             "results": [],
         }
 
-    if tool_name in GATED_TOOLS:
+    # Approval gating comes exclusively from trusted application context.
+    # The LLM cannot influence ``is_approved``; it is bound by the caller.
+    if tool_name in GATED_TOOLS and not is_approved:
         return {
             "tool": tool_name,
             "error": "approval_required",

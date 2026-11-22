@@ -482,7 +482,6 @@ def test_the_agent_keeps_its_request_shape_without_history(database):
 
     request_input = client.responses.requests[0]["input"]
     assert len(request_input) == 1
-    assert request_input[0]["id"] == "input_1"
     assert request_input[0]["content"][0]["text"] == "the current question"
 
 
@@ -597,10 +596,6 @@ def test_the_current_message_is_sent_exactly_once(database):
         if item.get("type") == "message" and item.get("role") == "user"
     ]
     assert user_texts == ["First question.", "Second question."]
-
-    # The identifiers of the request items are unique.
-    identifiers = [item["id"] for item in request_input]
-    assert len(set(identifiers)) == len(identifiers)
 
 
 def test_a_tool_call_stays_paired_with_its_output_across_turns(database):

@@ -89,6 +89,14 @@ class GroqLLMProviderAdapter:
     @staticmethod
     def _message_to_items(message: dict[str, Any]) -> list[dict[str, Any]]:
         role = message.get("role")
+        item_type = message.get("type")
+
+        # History items from the session store use ``type`` without ``role``.
+        if item_type == "function_call":
+            return [GroqLLMProviderAdapter._function_call_item(message)]
+        if item_type == "function_call_output":
+            return [GroqLLMProviderAdapter._function_call_output_item(message)]
+
         if role == "user":
             return [GroqLLMProviderAdapter._user_item(message)]
         if role == "assistant":
@@ -126,23 +134,29 @@ class GroqLLMProviderAdapter:
 
     @staticmethod
     def _user_item(message: dict[str, Any]) -> dict[str, Any]:
-        return {
+        item: dict[str, Any] = {
             "type": "message",
             "role": "user",
             "content": [
                 {"type": "input_text", "text": GroqLLMProviderAdapter._message_text(message)}
             ],
         }
+        if message.get("id"):
+            item["id"] = message["id"]
+        return item
 
     @staticmethod
     def _assistant_item(message: dict[str, Any]) -> dict[str, Any]:
-        return {
+        item: dict[str, Any] = {
             "type": "message",
             "role": "assistant",
             "content": [
                 {"type": "output_text", "text": GroqLLMProviderAdapter._message_text(message)}
             ],
         }
+        if message.get("id"):
+            item["id"] = message["id"]
+        return item
 
     @staticmethod
     def _function_call_item(tool_call: dict[str, Any]) -> dict[str, Any]:
@@ -154,22 +168,27 @@ class GroqLLMProviderAdapter:
         else:
             arguments_json = json.dumps(arguments)
         call_id = tool_call.get("call_id") or tool_call.get("id")
-        return {
+        item: dict[str, Any] = {
             "type": "function_call",
             "id": call_id,
             "call_id": call_id,
             "name": tool_call.get("name", ""),
             "arguments": arguments_json,
         }
+        return item
 
     @staticmethod
     def _function_call_output_item(message: dict[str, Any]) -> dict[str, Any]:
-        return {
+        item: dict[str, Any] = {
             "type": "function_call_output",
             "call_id": message.get("tool_call_id") or message.get("call_id"),
             "name": message.get("name", ""),
-            "output": GroqLLMProviderAdapter._message_text(message),
+            "output": message.get("output")
+            or GroqLLMProviderAdapter._message_text(message),
         }
+        if message.get("id"):
+            item["id"] = message["id"]
+        return item
 
     @staticmethod
     def _convert_tools(

@@ -1,5 +1,23 @@
 from pydantic import BaseModel, Field, field_validator
-from typing import Literal
+from typing import Any, Literal
+
+
+def strip_titles(schema_obj: Any) -> Any:
+    """Recursively remove ``title`` keys from a JSON schema dict.
+
+    Pydantic's ``model_json_schema()`` adds ``title`` fields at the root and
+    on every property. OpenAI's function tool parameters do not need them and
+    some providers reject unknown schema fields.
+    """
+    if isinstance(schema_obj, dict):
+        return {
+            key: strip_titles(value)
+            for key, value in schema_obj.items()
+            if key != "title"
+        }
+    if isinstance(schema_obj, list):
+        return [strip_titles(item) for item in schema_obj]
+    return schema_obj
 
 
 class SearchKnowledgeArgs(BaseModel):

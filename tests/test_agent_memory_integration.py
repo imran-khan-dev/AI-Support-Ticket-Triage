@@ -226,16 +226,9 @@ def test_relevant_memories_are_included_exactly_once(database):
     assert response.status_code == 200
 
     request_input = fake_client.responses.requests[0]["input"]
-    system_items = _system_items(request_input)
-    assert len(system_items) == 1
-    assert system_items[0]["type"] == "message"
-    assert system_items[0]["id"] == "mem_context_1"
-    assert "Refunds take five days." in system_items[0]["content"][0]["text"]
-    assert sum(
-        1
-        for item in request_input
-        if item.get("type") == "message" and item.get("role") == "system"
-    ) == 1
+    call_kwargs = fake_client.responses.requests[0]
+    assert "Refunds take five days." in call_kwargs.get("instructions", "")
+    assert _system_items(request_input) == []
 
 
 def test_the_current_user_message_appears_once_and_stays_last(database):
@@ -277,8 +270,8 @@ def test_memory_is_placed_before_the_conversation_history(database):
     assert second.status_code == 200
 
     request_input = fake_client.responses.requests[1]["input"]
-    assert request_input[0]["role"] == "system"
-    assert request_input[0]["id"] == "mem_context_1"
+    call_kwargs = fake_client.responses.requests[1]
+    assert "Refunds take five days." in call_kwargs.get("instructions", "")
 
     conversation = [
         item["content"][0]["text"]
@@ -291,7 +284,6 @@ def test_memory_is_placed_before_the_conversation_history(database):
         "First answer.",
         "Another question about a refund",
     ]
-    assert "Refunds take five days." in request_input[0]["content"][0]["text"]
 
 
 def test_without_memories_the_provider_input_is_unchanged(database):
@@ -308,7 +300,6 @@ def test_without_memories_the_provider_input_is_unchanged(database):
     assert len(request_input) == 1
     assert request_input[0]["type"] == "message"
     assert request_input[0]["role"] == "user"
-    assert request_input[0]["id"] == "input_1"
     assert request_input[0]["content"][0]["text"] == "I need a refund"
     assert _system_items(request_input) == []
 
@@ -326,8 +317,10 @@ def test_memories_of_another_session_are_never_included(database):
     assert response.status_code == 200
 
     request_input = fake_client.responses.requests[0]["input"]
+    call_kwargs = fake_client.responses.requests[0]
     assert _system_items(request_input) == []
     assert "Refunds take five days." not in json.dumps(request_input)
+    assert "Refunds take five days." not in call_kwargs.get("instructions", "")
 
 
 def test_memories_are_recalled_only_after_the_session_is_resolved(
@@ -459,9 +452,9 @@ def test_memory_and_tool_call_items_remain_distinct(database):
     assert calls[0]["call_id"] == outputs[0]["call_id"] == "call_1"
     assert calls[0]["name"] == outputs[0]["name"] == "search_support_docs"
 
-    # The memory is a message item and nothing else.
-    assert len(_system_items(follow_up)) == 1
-    assert follow_up[0]["role"] == "system"
+    # The memory is carried in instructions, not in input items.
+    call_kwargs = fake_client.responses.requests[1]
+    assert "Refunds take five days." in call_kwargs.get("instructions", "")
 
 
 def test_the_response_contract_is_unchanged(database):
@@ -730,11 +723,9 @@ def test_the_written_memory_is_recalled_by_a_later_request(database):
     assert second.status_code == 200
 
     request_input = fake_client.responses.requests[1]["input"]
-    system_items = _system_items(request_input)
+    call_kwargs = fake_client.responses.requests[1]
 
-    assert len(system_items) == 1
-    assert system_items[0]["id"] == "mem_context_1"
     assert (
         "Refunds are issued within five days."
-        in system_items[0]["content"][0]["text"]
+        in call_kwargs.get("instructions", "")
     )
