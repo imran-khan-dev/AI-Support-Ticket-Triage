@@ -8,6 +8,7 @@ isolated PostgreSQL test database.
 import json
 import logging
 import os
+import uuid
 from contextlib import contextmanager
 from unittest.mock import patch
 
@@ -23,6 +24,9 @@ from app.database import (
     list_messages,
 )
 from main import app
+from app.database import get_database
+from app.modules.integrations.service import issue_integration_credential
+from app.database.repository import _canonical_uuid
 
 
 #: Every test in this module writes to the database.
@@ -35,6 +39,25 @@ api_client = TestClient(app)
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _issue_integration_auth_header(tenant_id=None):
+    """Create an integration credential and return auth headers and tenant_id."""
+    db = get_database(os.environ["DATABASE_URL"])
+    integration, credential, token = issue_integration_credential(
+        db, integration_name=f"test-memory-integ-{uuid.uuid4().hex[:8]}"
+    )
+    tid = tenant_id or str(uuid.uuid4())
+    with db.write_transaction() as conn:
+        conn.execute(
+            "INSERT INTO tenants (id, name, enabled) VALUES (%s, %s, TRUE) ON CONFLICT (id) DO NOTHING",
+            (_canonical_uuid(tid), f"memory-tenant-{tid[:8]}"),
+        )
+        conn.execute(
+            "UPDATE integrations SET tenant_id = %s WHERE id = %s",
+            (_canonical_uuid(tid), _canonical_uuid(integration.id)),
+        )
+    return {"Authorization": f"Bearer {token}"}, tid
 
 
 class _FakeResponse:
@@ -135,15 +158,17 @@ def _settings():
 @contextmanager
 def _route(settings, groq_client=None):
     """Point the agent endpoint at a settings object and a provider."""
-    with patch("app.modules.agent.route.settings", settings):
-        with patch("app.modules.agent.route.groq_client", groq_client):
-            yield
+    headers, tenant_id = _issue_integration_auth_header()
+    with patch("app.modules.agent.service.settings", settings):
+        with patch("app.modules.agent.service.groq_client", groq_client):
+            yield headers, tenant_id
 
 
-def _post(message, session_id=None):
+def _post(message, session_id=None, headers=None):
     return api_client.post(
         "/api/v1/tickets/agent/run",
         json={"message": message, "session_id": session_id},
+        headers=headers,
     )
 
 
@@ -191,38 +216,29 @@ def _stored_answer(database, session_id):
 
 def test_relevant_memories_are_included_exactly_once(database):
     """The recalled memory is carried by exactly one item."""
-    session = create_session(database)
-    _store_memory(database, session.id)
-
     fake_client = _FakeClient([_FakeResponse(output_text="The answer.")])
 
-    with _route(_settings(), fake_client):
-        response = _post("I need a refund", session_id=session.id)
+    with _route(_settings(), fake_client) as (headers, tenant_id):
+        session = create_session(database, tenant_id=tenant_id)
+        _store_memory(database, session.id)
+        response = _post("I need a refund", session_id=session.id, headers=headers)
 
     assert response.status_code == 200
 
     request_input = fake_client.responses.requests[0]["input"]
-    system_items = _system_items(request_input)
-    assert len(system_items) == 1
-    assert system_items[0]["type"] == "message"
-    assert system_items[0]["id"] == "mem_context_1"
-    assert "Refunds take five days." in system_items[0]["content"][0]["text"]
-    assert sum(
-        1
-        for item in request_input
-        if item.get("type") == "message" and item.get("role") == "system"
-    ) == 1
+    call_kwargs = fake_client.responses.requests[0]
+    assert "Refunds take five days." in call_kwargs.get("instructions", "")
+    assert _system_items(request_input) == []
 
 
 def test_the_current_user_message_appears_once_and_stays_last(database):
     """The message of the current run is sent once, at the end."""
-    session = create_session(database)
-    _store_memory(database, session.id)
-
     fake_client = _FakeClient([_FakeResponse(output_text="The answer.")])
 
-    with _route(_settings(), fake_client):
-        _post("I need a refund", session_id=session.id)
+    with _route(_settings(), fake_client) as (headers, tenant_id):
+        session = create_session(database, tenant_id=tenant_id)
+        _store_memory(database, session.id)
+        _post("I need a refund", session_id=session.id, headers=headers)
 
     request_input = fake_client.responses.requests[0]["input"]
     user_texts = [
@@ -238,9 +254,6 @@ def test_the_current_user_message_appears_once_and_stays_last(database):
 
 def test_memory_is_placed_before_the_conversation_history(database):
     """The recalled memory comes first, the conversation follows."""
-    session = create_session(database)
-    _store_memory(database, session.id)
-
     fake_client = _FakeClient(
         [
             _FakeResponse(output_text="First answer."),
@@ -248,15 +261,17 @@ def test_memory_is_placed_before_the_conversation_history(database):
         ]
     )
 
-    with _route(_settings(), fake_client):
-        first = _post("A question about a refund", session_id=session.id)
-        second = _post("Another question about a refund", session_id=session.id)
+    with _route(_settings(), fake_client) as (headers, tenant_id):
+        session = create_session(database, tenant_id=tenant_id)
+        _store_memory(database, session.id)
+        first = _post("A question about a refund", session_id=session.id, headers=headers)
+        second = _post("Another question about a refund", session_id=session.id, headers=headers)
 
     assert second.status_code == 200
 
     request_input = fake_client.responses.requests[1]["input"]
-    assert request_input[0]["role"] == "system"
-    assert request_input[0]["id"] == "mem_context_1"
+    call_kwargs = fake_client.responses.requests[1]
+    assert "Refunds take five days." in call_kwargs.get("instructions", "")
 
     conversation = [
         item["content"][0]["text"]
@@ -269,17 +284,15 @@ def test_memory_is_placed_before_the_conversation_history(database):
         "First answer.",
         "Another question about a refund",
     ]
-    assert "Refunds take five days." in request_input[0]["content"][0]["text"]
 
 
 def test_without_memories_the_provider_input_is_unchanged(database):
     """A run without memories sends exactly what it sent before."""
-    session = create_session(database)
-
     fake_client = _FakeClient([_FakeResponse(output_text="The answer.")])
 
-    with _route(_settings(), fake_client):
-        response = _post("I need a refund", session_id=session.id)
+    with _route(_settings(), fake_client) as (headers, tenant_id):
+        session = create_session(database, tenant_id=tenant_id)
+        response = _post("I need a refund", session_id=session.id, headers=headers)
 
     assert response.status_code == 200
 
@@ -287,27 +300,27 @@ def test_without_memories_the_provider_input_is_unchanged(database):
     assert len(request_input) == 1
     assert request_input[0]["type"] == "message"
     assert request_input[0]["role"] == "user"
-    assert request_input[0]["id"] == "input_1"
     assert request_input[0]["content"][0]["text"] == "I need a refund"
     assert _system_items(request_input) == []
 
 
 def test_memories_of_another_session_are_never_included(database):
     """A session never sees the memories of another session."""
-    first = create_session(database)
-    second = create_session(database)
-    _store_memory(database, first.id)
-
     fake_client = _FakeClient([_FakeResponse(output_text="The answer.")])
 
-    with _route(_settings(), fake_client):
-        response = _post("I need a refund", session_id=second.id)
+    with _route(_settings(), fake_client) as (headers, tenant_id):
+        first = create_session(database, tenant_id=tenant_id)
+        second = create_session(database, tenant_id=tenant_id)
+        _store_memory(database, first.id)
+        response = _post("I need a refund", session_id=second.id, headers=headers)
 
     assert response.status_code == 200
 
     request_input = fake_client.responses.requests[0]["input"]
+    call_kwargs = fake_client.responses.requests[0]
     assert _system_items(request_input) == []
     assert "Refunds take five days." not in json.dumps(request_input)
+    assert "Refunds take five days." not in call_kwargs.get("instructions", "")
 
 
 def test_memories_are_recalled_only_after_the_session_is_resolved(
@@ -316,15 +329,16 @@ def test_memories_are_recalled_only_after_the_session_is_resolved(
     """An unknown session is refused before any memory is searched."""
     recorder = _RecordingSearch()
     monkeypatch.setattr(
-        "app.modules.agent.memory.search_memories", recorder
+        "app.domain.agent.services.load_session_memory", recorder
     )
 
     fake_client = _FakeClient([_FakeResponse(output_text="The answer.")])
 
-    with _route(_settings(), fake_client):
+    with _route(_settings(), fake_client) as (headers, tenant_id):
         response = _post(
             "I need a refund",
             session_id="11111111-1111-4111-8111-111111111111",
+            headers=headers,
         )
 
     assert response.status_code == 404
@@ -340,17 +354,16 @@ def test_a_storage_failure_during_the_recall_is_logged_and_the_run_continues(
     database, caplog
 ):
     """A failing recall costs the customer no answer."""
-    session = create_session(database)
-
     fake_client = _FakeClient([_FakeResponse(output_text="The answer.")])
 
     with caplog.at_level(logging.ERROR, logger="agent.service"):
         with patch(
-            "app.modules.agent.memory.search_memories",
+            "app.domain.agent.memory.search_memories",
             side_effect=psycopg.OperationalError("the store is down"),
         ):
-            with _route(_settings(), fake_client):
-                response = _post("I need a refund", session_id=session.id)
+            with _route(_settings(), fake_client) as (headers, tenant_id):
+                session = create_session(database, tenant_id=tenant_id)
+                response = _post("I need a refund", session_id=session.id, headers=headers)
 
     assert response.status_code == 200
     assert response.json()["status"] == "success"
@@ -364,23 +377,22 @@ def test_a_storage_failure_during_the_recall_is_logged_and_the_run_continues(
     # The failure was reported, not hidden.
     assert any(
         record.levelno == logging.ERROR
-        and "Failed to recall the memories" in record.getMessage()
+        and "Failed to recall the memories of session" in record.getMessage()
         for record in caplog.records
     )
 
 
 def test_a_history_failure_still_answers_service_unavailable(database):
     """The established behaviour of the history read is unchanged."""
-    session = create_session(database)
-
     fake_client = _FakeClient([_FakeResponse(output_text="The answer.")])
 
     with patch(
-        "app.modules.agent.route.load_session_history",
+        "app.modules.agent.service.load_session_history",
         side_effect=StorageError("The session store is unavailable."),
     ):
-        with _route(_settings(), fake_client):
-            response = _post("I need a refund", session_id=session.id)
+        with _route(_settings(), fake_client) as (headers, tenant_id):
+            session = create_session(database, tenant_id=tenant_id)
+            response = _post("I need a refund", session_id=session.id, headers=headers)
 
     assert response.status_code == 503
     assert response.json()["detail"] == (
@@ -389,31 +401,24 @@ def test_a_history_failure_still_answers_service_unavailable(database):
     assert fake_client.responses.requests == []
 
 
+def test_mock_mode_remains_functional_and_makes_no_provider_call(database):
+    """A run without a provider key answers from the mock service."""
+    with _route(_settings(), None) as (headers, tenant_id):
+        session = create_session(database, tenant_id=tenant_id)
+        response = _post("I need a refund", session_id=session.id, headers=headers)
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "mock"
+    assert response.json()["mock_mode"] is True
+
+
 # ---------------------------------------------------------------------------
 # The rest of the endpoint
 # ---------------------------------------------------------------------------
 
 
-def test_mock_mode_remains_functional_and_makes_no_provider_call(database):
-    """A run without a provider key answers from the mock service."""
-    session = create_session(database)
-
-    fake_client = _FakeClient([_FakeResponse(output_text="unused.")])
-
-    with _route(_settings(), None):
-        response = _post("I need a refund", session_id=session.id)
-
-    assert response.status_code == 200
-    assert response.json()["status"] == "mock"
-    assert response.json()["mock_mode"] is True
-    assert fake_client.responses.requests == []
-
-
 def test_memory_and_tool_call_items_remain_distinct(database):
     """The memory context does not disturb the tool-call pairing."""
-    session = create_session(database)
-    _store_memory(database, session.id)
-
     fake_client = _FakeClient(
         [
             _FakeResponse(
@@ -429,8 +434,10 @@ def test_memory_and_tool_call_items_remain_distinct(database):
         ]
     )
 
-    with _route(_settings(), fake_client):
-        response = _post("I need a refund", session_id=session.id)
+    with _route(_settings(), fake_client) as (headers, tenant_id):
+        session = create_session(database, tenant_id=tenant_id)
+        _store_memory(database, session.id)
+        response = _post("I need a refund", session_id=session.id, headers=headers)
 
     assert response.status_code == 200
 
@@ -445,20 +452,19 @@ def test_memory_and_tool_call_items_remain_distinct(database):
     assert calls[0]["call_id"] == outputs[0]["call_id"] == "call_1"
     assert calls[0]["name"] == outputs[0]["name"] == "search_support_docs"
 
-    # The memory is a message item and nothing else.
-    assert len(_system_items(follow_up)) == 1
-    assert follow_up[0]["role"] == "system"
+    # The memory is carried in instructions, not in input items.
+    call_kwargs = fake_client.responses.requests[1]
+    assert "Refunds take five days." in call_kwargs.get("instructions", "")
 
 
 def test_the_response_contract_is_unchanged(database):
     """The body, the headers, and the stored transcript stay as they were."""
-    session = create_session(database)
-    _store_memory(database, session.id)
-
     fake_client = _FakeClient([_FakeResponse(output_text="The answer.")])
 
-    with _route(_settings(), fake_client):
-        response = _post("I need a refund", session_id=session.id)
+    with _route(_settings(), fake_client) as (headers, tenant_id):
+        session = create_session(database, tenant_id=tenant_id)
+        _store_memory(database, session.id)
+        response = _post("I need a refund", session_id=session.id, headers=headers)
 
     assert response.status_code == 200
     assert set(response.json()) == {
@@ -488,14 +494,13 @@ def test_the_response_contract_is_unchanged(database):
 
 def test_a_successful_run_stores_one_summary_memory(database):
     """The answer of the agent is stored as a memory of the session."""
-    session = create_session(database)
-
     fake_client = _FakeClient(
         [_FakeResponse(output_text="Refunds are issued within five days.")]
     )
 
-    with _route(_settings(), fake_client):
-        response = _post("I need a refund", session_id=session.id)
+    with _route(_settings(), fake_client) as (headers, tenant_id):
+        session = create_session(database, tenant_id=tenant_id)
+        response = _post("I need a refund", session_id=session.id, headers=headers)
 
     assert response.status_code == 200
 
@@ -508,14 +513,13 @@ def test_a_successful_run_stores_one_summary_memory(database):
 
 def test_the_memory_points_at_the_stored_answer(database):
     """The memory carries the id of the stored answer of the run."""
-    session = create_session(database)
-
     fake_client = _FakeClient(
         [_FakeResponse(output_text="Refunds are issued within five days.")]
     )
 
-    with _route(_settings(), fake_client):
-        _post("I need a refund", session_id=session.id)
+    with _route(_settings(), fake_client) as (headers, tenant_id):
+        session = create_session(database, tenant_id=tenant_id)
+        _post("I need a refund", session_id=session.id, headers=headers)
 
     answer = _stored_answer(database, session.id)
     memories = _memories(database, session.id)
@@ -527,8 +531,6 @@ def test_the_memory_points_at_the_stored_answer(database):
 
 def test_the_memory_points_at_the_answer_and_not_at_a_tool_call(database):
     """A run that called a tool still points at its answer."""
-    session = create_session(database)
-
     fake_client = _FakeClient(
         [
             _FakeResponse(
@@ -544,8 +546,9 @@ def test_the_memory_points_at_the_answer_and_not_at_a_tool_call(database):
         ]
     )
 
-    with _route(_settings(), fake_client):
-        _post("I need a refund", session_id=session.id)
+    with _route(_settings(), fake_client) as (headers, tenant_id):
+        session = create_session(database, tenant_id=tenant_id)
+        _post("I need a refund", session_id=session.id, headers=headers)
 
     answer = _stored_answer(database, session.id)
     memories = _memories(database, session.id)
@@ -556,8 +559,6 @@ def test_the_memory_points_at_the_answer_and_not_at_a_tool_call(database):
 
 def test_a_repeated_answer_is_stored_once(database):
     """The same answer is not stored a second time."""
-    session = create_session(database)
-
     fake_client = _FakeClient(
         [
             _FakeResponse(output_text="Refunds are issued within five days."),
@@ -565,9 +566,10 @@ def test_a_repeated_answer_is_stored_once(database):
         ]
     )
 
-    with _route(_settings(), fake_client):
-        _post("I need a refund", session_id=session.id)
-        second = _post("I need a refund again", session_id=session.id)
+    with _route(_settings(), fake_client) as (headers, tenant_id):
+        session = create_session(database, tenant_id=tenant_id)
+        _post("I need a refund", session_id=session.id, headers=headers)
+        second = _post("I need a refund again", session_id=session.id, headers=headers)
 
     assert second.status_code == 200
     assert len(_memories(database, session.id)) == 1
@@ -575,8 +577,6 @@ def test_a_repeated_answer_is_stored_once(database):
 
 def test_different_answers_are_stored_in_the_same_session(database):
     """A session can hold more than one memory."""
-    session = create_session(database)
-
     fake_client = _FakeClient(
         [
             _FakeResponse(output_text="Refunds are issued within five days."),
@@ -584,9 +584,10 @@ def test_different_answers_are_stored_in_the_same_session(database):
         ]
     )
 
-    with _route(_settings(), fake_client):
-        _post("I need a refund", session_id=session.id)
-        second = _post("And the other charge?", session_id=session.id)
+    with _route(_settings(), fake_client) as (headers, tenant_id):
+        session = create_session(database, tenant_id=tenant_id)
+        _post("I need a refund", session_id=session.id, headers=headers)
+        second = _post("And the other charge?", session_id=session.id, headers=headers)
 
     assert second.status_code == 200
     assert len(_memories(database, session.id)) == 2
@@ -594,9 +595,6 @@ def test_different_answers_are_stored_in_the_same_session(database):
 
 def test_the_same_answer_in_another_session_stays_isolated(database):
     """A memory belongs to one session only."""
-    first = create_session(database)
-    second = create_session(database)
-
     fake_client = _FakeClient(
         [
             _FakeResponse(output_text="Refunds are issued within five days."),
@@ -604,9 +602,11 @@ def test_the_same_answer_in_another_session_stays_isolated(database):
         ]
     )
 
-    with _route(_settings(), fake_client):
-        _post("I need a refund", session_id=first.id)
-        _post("I need a refund", session_id=second.id)
+    with _route(_settings(), fake_client) as (headers, tenant_id):
+        first = create_session(database, tenant_id=tenant_id)
+        second = create_session(database, tenant_id=tenant_id)
+        _post("I need a refund", session_id=first.id, headers=headers)
+        _post("I need a refund", session_id=second.id, headers=headers)
 
     first_memories = _memories(database, first.id)
     second_memories = _memories(database, second.id)
@@ -620,10 +620,9 @@ def test_the_same_answer_in_another_session_stays_isolated(database):
 
 def test_a_mock_run_stores_no_memory(database):
     """The mock answer is not a memory of the session."""
-    session = create_session(database)
-
-    with _route(_settings(), None):
-        response = _post("I need a refund", session_id=session.id)
+    with _route(_settings(), None) as (headers, tenant_id):
+        session = create_session(database, tenant_id=tenant_id)
+        response = _post("I need a refund", session_id=session.id, headers=headers)
 
     assert response.status_code == 200
     assert response.json()["status"] == "mock"
@@ -632,10 +631,9 @@ def test_a_mock_run_stores_no_memory(database):
 
 def test_a_provider_failure_stores_no_memory(database):
     """A failed run keeps its behaviour and stores nothing."""
-    session = create_session(database)
-
-    with _route(_settings(), _FailingClient()):
-        response = _post("I need a refund", session_id=session.id)
+    with _route(_settings(), _FailingClient()) as (headers, tenant_id):
+        session = create_session(database, tenant_id=tenant_id)
+        response = _post("I need a refund", session_id=session.id, headers=headers)
 
     assert response.status_code == 502
     assert response.json()["detail"] == (
@@ -647,19 +645,18 @@ def test_a_provider_failure_stores_no_memory(database):
 
 def test_a_failed_memory_write_leaves_the_answer_untouched(database, caplog):
     """A memory that cannot be stored costs the customer no answer."""
-    session = create_session(database)
-
     fake_client = _FakeClient(
         [_FakeResponse(output_text="Refunds are issued within five days.")]
     )
 
     with caplog.at_level(logging.ERROR, logger="agent.service"):
         with patch(
-            "app.modules.agent.service.append_memories",
+            "app.domain.agent.services.append_memories",
             side_effect=psycopg.OperationalError("the store is down"),
         ):
-            with _route(_settings(), fake_client):
-                response = _post("I need a refund", session_id=session.id)
+            with _route(_settings(), fake_client) as (headers, tenant_id):
+                session = create_session(database, tenant_id=tenant_id)
+                response = _post("I need a refund", session_id=session.id, headers=headers)
 
     assert response.status_code == 200
     assert response.json()["status"] == "success"
@@ -689,18 +686,17 @@ def test_a_failed_memory_write_leaves_the_answer_untouched(database, caplog):
 
 def test_a_failed_transcript_stops_the_memory_from_being_written(database):
     """Without a stored answer there is no memory to point at."""
-    session = create_session(database)
-
     fake_client = _FakeClient([_FakeResponse(output_text="The answer.")])
     recorder = _RecordingStore()
 
     with patch(
-        "app.modules.agent.service.append_messages",
+        "app.domain.agent.services.append_messages",
         side_effect=RuntimeError("storage is down"),
     ):
-        with patch("app.modules.agent.route.store_run_memory", recorder):
-            with _route(_settings(), fake_client):
-                response = _post("I need a refund", session_id=session.id)
+        with patch("app.domain.agent.services.store_run_memory", recorder):
+            with _route(_settings(), fake_client) as (headers, tenant_id):
+                session = create_session(database, tenant_id=tenant_id)
+                response = _post("I need a refund", session_id=session.id, headers=headers)
 
     assert response.status_code == 200
     assert response.json()["answer"] == "The answer."
@@ -711,8 +707,6 @@ def test_a_failed_transcript_stops_the_memory_from_being_written(database):
 
 def test_the_written_memory_is_recalled_by_a_later_request(database):
     """A later run of the session sees what the earlier run learned."""
-    session = create_session(database)
-
     fake_client = _FakeClient(
         [
             _FakeResponse(output_text="Refunds are issued within five days."),
@@ -720,19 +714,18 @@ def test_the_written_memory_is_recalled_by_a_later_request(database):
         ]
     )
 
-    with _route(_settings(), fake_client):
-        first = _post("Tell me about refunds", session_id=session.id)
-        second = _post("I need a refund", session_id=session.id)
+    with _route(_settings(), fake_client) as (headers, tenant_id):
+        session = create_session(database, tenant_id=tenant_id)
+        first = _post("Tell me about refunds", session_id=session.id, headers=headers)
+        second = _post("I need a refund", session_id=session.id, headers=headers)
 
     assert first.status_code == 200
     assert second.status_code == 200
 
     request_input = fake_client.responses.requests[1]["input"]
-    system_items = _system_items(request_input)
+    call_kwargs = fake_client.responses.requests[1]
 
-    assert len(system_items) == 1
-    assert system_items[0]["id"] == "mem_context_1"
     assert (
         "Refunds are issued within five days."
-        in system_items[0]["content"][0]["text"]
+        in call_kwargs.get("instructions", "")
     )

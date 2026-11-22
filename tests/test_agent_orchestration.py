@@ -19,7 +19,9 @@ builds:
 """
 
 import json
+import uuid
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 from pydantic import ValidationError
@@ -28,6 +30,29 @@ from app.agent_core.agent import AgentResult, MAX_ITERATIONS, run_agent
 from app.agent_core.tool_schemas import SearchSupportDocsArgs
 from app.agent_core.tools import TOOL_REGISTRY, execute_tool
 from app.core.config import Settings
+from app.database import get_database
+from app.knowledge.service import KnowledgeService
+from app.database.repository import _canonical_uuid
+
+
+def _create_test_tenant_with_knowledge(db):
+    """Create a test tenant and ingest a knowledge document about password reset."""
+    tenant_id = str(uuid.uuid4())
+    with db.write_transaction() as conn:
+        conn.execute(
+            "INSERT INTO tenants (id, name, enabled) VALUES (%s, %s, TRUE) ON CONFLICT (id) DO NOTHING",
+            (_canonical_uuid(tenant_id), f"test-tenant-{tenant_id[:8]}"),
+        )
+    # Ingest a document about password reset
+    service = KnowledgeService(db)
+    content = b"To reset your password, visit account settings and use 'Forgot password'. You will receive an email with a secure reset link."
+    service.ingest_document(
+        tenant_id=tenant_id,
+        file_content=content,
+        filename="password_reset.txt",
+        content_type="text/plain",
+    )
+    return tenant_id
 
 
 # ---------------------------------------------------------------------------
@@ -153,16 +178,18 @@ def _outputs_by_call_id(request_input):
 # ---------------------------------------------------------------------------
 
 
-def test_multiple_tool_calls_all_results_returned_to_model():
+def test_multiple_tool_calls_all_results_returned_to_model(clean_database):
     """Two tool calls in one response both execute and both results return."""
+    db = clean_database
+    tenant_id = _create_test_tenant_with_knowledge(db)
     client = _FakeClient(
         [
             _FakeResponse(
                 output=[
                     _SdkFunctionCall(
                         "call_1",
-                        "search_support_docs",
-                        '{"query": "password reset"}',
+                        "search_knowledge",
+                        '{"query": "password reset", "top_k": 5}',
                     ),
                     _SdkFunctionCall(
                         "call_2",
@@ -178,20 +205,27 @@ def test_multiple_tool_calls_all_results_returned_to_model():
         ]
     )
 
-    result = run_agent("Help me with my account.", _settings(), client)
+    result = run_agent("Help me with my account.", _settings(), client, tenant_id=tenant_id, db=db)
 
     assert result.status == "success"
     assert [call["call_id"] for call in result.tool_calls] == ["call_1", "call_2"]
     assert [call["tool"] for call in result.tool_calls] == [
-        "search_support_docs",
+        "search_knowledge",
         "lookup_ticket_history",
     ]
 
-    # Both tools executed; restricted tool is rejected as unknown/unavailable.
+    # Both tools executed; lookup_ticket_history is not registered (unknown_tool).
     docs_result = result.tool_calls[0]["result"]
     history_result = result.tool_calls[1]["result"]
     assert "error" not in docs_result
-    assert any(doc["id"] == "doc-001" for doc in docs_result["results"])
+    # Verify knowledge search returned results with expected structure
+    results = docs_result["results"]
+    assert len(results) >= 1
+    assert "chunk_id" in results[0]
+    assert "document_name" in results[0]
+    assert "content" in results[0]
+    assert "relevance_score" in results[0]
+    assert "Forgot password" in results[0]["content"]
     assert history_result.get("error") == "unknown_tool"
     assert history_result.get("results") == []
 
@@ -205,9 +239,9 @@ def test_multiple_tool_calls_all_results_returned_to_model():
     assert set(by_call_id) == {"call_1", "call_2"}
 
     docs_payload = json.loads(by_call_id["call_1"]["output"])
-    assert docs_payload["tool"] == "search_support_docs"
+    assert docs_payload["tool"] == "search_knowledge"
     assert docs_payload["count"] >= 1
-    assert by_call_id["call_1"]["name"] == "search_support_docs"
+    assert by_call_id["call_1"]["name"] == "search_knowledge"
 
     history_payload = json.loads(by_call_id["call_2"]["output"])
     assert history_payload["tool"] == "lookup_ticket_history"
@@ -715,7 +749,7 @@ def test_unregistered_tool_is_rejected_and_registry_is_unchanged():
 
 
 def test_agent_advertises_only_registered_tools():
-    """The tools sent to the model match the registry exactly."""
+    """The tools sent to the model match the LLM-visible tool definitions."""
     client = _FakeClient(
         [_FakeResponse(output=[_SdkMessage("Done.")], output_text="Done.")]
     )
@@ -725,15 +759,18 @@ def test_agent_advertises_only_registered_tools():
     tools = client.responses.calls[0]["tools"]
     advertised = [tool["name"] for tool in tools]
 
-    assert advertised == list(TOOL_REGISTRY)
-    assert set(advertised) == {"search_support_docs", "create_support_case"}
+    # The LLM only sees search_knowledge and create_support_case.
+    # search_support_docs is in TOOL_REGISTRY but intentionally not advertised.
+    assert advertised == ["search_knowledge", "create_support_case"]
+    assert set(advertised) == {"search_knowledge", "create_support_case"}
     for tool in tools:
         assert tool["type"] == "function"
         assert tool["name"]
         assert tool["description"]
         assert tool["parameters"]["type"] == "object"
-        if tool["name"] == "search_support_docs":
+        if tool["name"] == "search_knowledge":
             assert "query" in tool["parameters"]["properties"]
+            assert "top_k" in tool["parameters"]["properties"]
         elif tool["name"] == "create_support_case":
             assert "subject" in tool["parameters"]["properties"]
             assert "description" in tool["parameters"]["properties"]
@@ -812,3 +849,172 @@ def test_tool_schemas_reject_a_non_string_query():
 
     with pytest.raises(ValidationError):
         LookupTicketHistoryArgs(query=123)
+
+
+# ---------------------------------------------------------------------------
+# 10. AgentLoop integration: approval, tenant context, and Retrieval Stack.
+# ---------------------------------------------------------------------------
+
+
+def test_run_agent_approved_create_support_case_executes(clean_database):
+    """With approval, create_support_case is executed (never blocked)."""
+    client = _FakeClient(
+        [
+            _FakeResponse(
+                output=[
+                    _SdkFunctionCall(
+                        "call_1",
+                        "create_support_case",
+                        '{"subject": "broken", "description": "it broke", "priority": "high", "category": "technical"}',
+                    )
+                ],
+                output_text="",
+            ),
+            _FakeResponse(
+                output=[_SdkMessage("Case created.")],
+                output_text="Case created.",
+            ),
+        ]
+    )
+    result = run_agent("Create a case.", _settings(), client, is_approved=True)
+
+    assert result.status == "success"
+    assert result.tool_calls[0]["tool"] == "create_support_case"
+    assert result.tool_calls[0]["result"].get("error") is None
+    assert result.tool_calls[0]["result"]["tool"] == "create_support_case"
+    assert result.tool_calls[0]["result"]["count"] == 1
+    assert result.tool_calls[0]["result"]["results"][0]["status"] == "created"
+
+
+def test_run_agent_unapproved_create_support_case_refused():
+    """Without approval, create_support_case is refused and never creates a case."""
+    client = _FakeClient(
+        [
+            _FakeResponse(
+                output=[
+                    _SdkFunctionCall(
+                        "call_1",
+                        "create_support_case",
+                        '{"subject": "broken", "description": "it broke", "priority": "high", "category": "technical"}',
+                    )
+                ],
+                output_text="",
+            ),
+            _FakeResponse(
+                output=[_SdkMessage("I cannot create that case.")],
+                output_text="I cannot create that case.",
+            ),
+        ]
+    )
+    result = run_agent("Create a case.", _settings(), client, is_approved=False)
+
+    assert result.status == "success"
+    assert result.tool_calls[0]["tool"] == "create_support_case"
+    assert result.tool_calls[0]["result"]["error"] == "approval_required"
+    assert result.tool_calls[0]["result"]["results"] == []
+
+
+def test_run_agent_uses_trusted_tenant_for_knowledge_search(clean_database):
+    """Knowledge search is executed against the trusted (server-side) tenant."""
+    db = clean_database
+    tenant_id = _create_test_tenant_with_knowledge(db)
+    client = _FakeClient(
+        [
+            _FakeResponse(
+                output=[
+                    _SdkFunctionCall(
+                        "call_1", "search_knowledge", '{"query": "password reset"}'
+                    )
+                ],
+                output_text="",
+            ),
+            _FakeResponse(
+                output=[_SdkMessage("Reset via account settings.")],
+                output_text="Reset via account settings.",
+            ),
+        ]
+    )
+    result = run_agent(
+        "How do I reset my password?",
+        _settings(),
+        client,
+        tenant_id=tenant_id,
+        db=db,
+    )
+
+    assert result.status == "success"
+    assert result.tool_calls[0]["tool"] == "search_knowledge"
+    assert result.tool_calls[0]["result"]["tool"] == "search_knowledge"
+    assert len(result.tool_calls[0]["result"]["results"]) >= 1
+    assert "chunk_id" in result.tool_calls[0]["result"]["results"][0]
+    assert "content" in result.tool_calls[0]["result"]["results"][0]
+
+
+def test_run_agent_mock_mode_unchanged():
+    """Mock mode still short-circuits with no provider call."""
+    client = None
+    result = run_agent("Help me.", _settings(), client)
+
+    assert result.status == "mock"
+    assert result.answer is not None
+    assert "API key" in result.answer
+    assert result.tool_calls == []
+    assert result.error is None
+
+
+def test_run_agent_trusted_tenant_used_for_knowledge_search():
+    """The trusted (server-side) tenant id is what reaches the tool handler."""
+    captured = {}
+
+    def fake_execute_tool(name, raw_arguments, *, tenant_id=None, db=None, is_approved=False):
+        captured["tenant_id"] = tenant_id
+        return {"tool": name, "results": [], "count": 0}
+
+    with patch("app.agent_core.orchestrator_tools.execute_tool", side_effect=fake_execute_tool):
+        client = _FakeClient(
+            [
+                _FakeResponse(
+                    output=[
+                        _SdkFunctionCall("call_1", "search_knowledge", '{"query": "x"}')
+                    ],
+                    output_text="",
+                ),
+                _FakeResponse(
+                    output=[_SdkMessage("Done.")],
+                    output_text="Done.",
+                ),
+            ]
+        )
+        run_agent("Help.", _settings(), client, tenant_id="trusted-tenant", db=object())
+
+    assert captured["tenant_id"] == "trusted-tenant"
+
+
+def test_run_agent_model_supplied_tenant_id_is_rejected():
+    """A tenant_id supplied by the model is rejected by the tool schema."""
+    client = _FakeClient(
+        [
+            _FakeResponse(
+                output=[
+                    _SdkFunctionCall(
+                        "call_1",
+                        "search_knowledge",
+                        '{"query": "x", "tenant_id": "llm-tenant"}',
+                    )
+                ],
+                output_text="",
+            ),
+            _FakeResponse(
+                output=[_SdkMessage("Done.")],
+                output_text="Done.",
+            ),
+        ]
+    )
+    result = run_agent("Help.", _settings(), client, tenant_id="trusted-tenant", db=object())
+
+    # The model-supplied tenant_id is not accepted; validation fails safely and
+    # execution falls through to a final answer without using llm-tenant.
+    assert result.status == "success"
+    assert result.tool_calls[0]["result"]["error"] == "invalid_arguments"
+
+

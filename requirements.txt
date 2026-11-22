@@ -6,3 +6,7 @@ httpx
 openai
 psycopg[binary]
 psycopg-pool
+pymupdf
+tiktoken
+sentence-transformers
+jsonschema>=4.0

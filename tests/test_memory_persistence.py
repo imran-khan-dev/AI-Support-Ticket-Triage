@@ -38,7 +38,7 @@ def test_the_schema_version_is_the_one_of_the_latest_migration(database):
     """The schema version is the one of the latest migration."""
     with database.connection() as conn:
         assert current_version(conn) == MIGRATIONS[-1][0]
-    assert MIGRATIONS[-1][0] == 4
+    assert MIGRATIONS[-1][0] == 7
     assert (2, "memory_full_text_search") in [
         (version, name) for version, name, _ in MIGRATIONS
     ]

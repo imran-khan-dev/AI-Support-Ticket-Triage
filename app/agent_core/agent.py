@@ -28,8 +28,20 @@ from typing import Any
 
 from openai import OpenAI
 
+from agent_orchestrator.config import OrchestratorConfig
+from agent_orchestrator.core.loop import AgentLoop
+from agent_orchestrator.core.models import ExecutionStatus
 from app.core.config import Settings
-from app.agent_core.tools import TOOL_REGISTRY, execute_tool
+from app.agent_core.tool_schemas import strip_titles
+
+from app.agent_core.groq_provider import GroqLLMProviderAdapter
+from app.agent_core.orchestrator_tools import (
+    ADVERTISED_TOOL_NAMES,
+    build_advertised_tool_definitions,
+    build_tool_executor,
+    build_tool_registry,
+)
+from app.agent_core.tools import execute_tool
 
 
 class AgentResult:
@@ -75,57 +87,6 @@ class AgentResult:
 MAX_ITERATIONS = 10
 
 
-def _strip_titles(schema_obj: Any) -> Any:
-    """Recursively remove ``title`` keys from a JSON schema dict.
-
-    Pydantic's ``model_json_schema()`` adds ``title`` fields at the root and
-    on every property. OpenAI's function tool parameters do not need them and
-    some providers reject unknown schema fields.
-    """
-    if isinstance(schema_obj, dict):
-        return {
-            key: _strip_titles(value)
-            for key, value in schema_obj.items()
-            if key != "title"
-        }
-    if isinstance(schema_obj, list):
-        return [_strip_titles(item) for item in schema_obj]
-    return schema_obj
-
-# Prepare the tools for Groq
-def _build_tool_definitions() -> list[dict[str, Any]]:
-    """Build OpenAI function tool definitions from the registered tools.
-
-    Derives JSON schemas from the Pydantic argument schemas in
-    ``app.tool_schemas`` so tool argument validation is defined in one place.
-    """
-    definitions: list[dict[str, Any]] = []
-    for tool_name, (args_schema, _func) in TOOL_REGISTRY.items():
-        json_schema = args_schema.model_json_schema()
-        parameters = _strip_titles(json_schema)
-        parameters["additionalProperties"] = False
-        description = ""
-        if "query" in args_schema.model_fields:
-            field_info = args_schema.model_fields["query"]
-            if field_info.description:
-                description = field_info.description
-        elif "subject" in args_schema.model_fields:
-            field_info = args_schema.model_fields["subject"]
-            if field_info.description:
-                description = "Create a support case"
-        elif tool_name == "create_support_case":
-            description = "Create a support case"
-        definitions.append(
-            {
-                "type": "function",
-                "name": tool_name,
-                "description": description,
-                "parameters": parameters,
-            }
-        )
-    return definitions
-
-
 def _get_system_prompt() -> str:
     """Return the system instruction for the support agent."""
     return (
@@ -133,8 +94,9 @@ def _get_system_prompt() -> str:
         "customer support tickets by gathering evidence using the available "
         "tools, then providing a final answer.\n\n"
         "Available tools:\n"
-        "- search_support_docs: search support documentation for answers to "
-        "common questions about password resets, billing, login, and more.\n"
+        "- search_knowledge: search the authenticated tenant's support "
+        "documentation for answers to common questions about password resets, "
+        "billing, login, and more.\n"
         "- create_support_case: create a support case for consequential actions "
         "(requires approval).\n\n"
         "Rules:\n"
@@ -151,27 +113,35 @@ def _get_system_prompt() -> str:
     )
 
 
-def _extract_text_from_output(output_items: list[Any]) -> str:
-    """Extract plain text from message output items."""
-    parts: list[str] = []
-    for item in output_items:
-        content = getattr(item, "content", None)
-        if not content:
-            continue
-        for part in content:
-            text = getattr(part, "text", None)
-            if text:
-                parts.append(text)
-    return "".join(parts)
+def _safe_tool_error(tool_name: str, error_message: str) -> dict[str, Any]:
+    """Build a safe ``execute_tool``-style error result for orchestrator errors.
 
+    The format mirrors :func:`app.agent_core.tools.execute_tool` so that
+    callers can read ``result["tool"]``, ``result["error"]`` and
+    ``result["results"]`` regardless of whether a tool was registered or not.
+    """
+    lowered = (error_message or "").lower()
+    if "notfounderror" in lowered or "not registered" in lowered:
+        return {
+            "tool": tool_name,
+            "error": "unknown_tool",
+            "message": f"Tool '{tool_name}' is not registered.",
+            "results": [],
+        }
+    if "validationerror" in lowered or "invalid" in lowered:
+        return {
+            "tool": tool_name,
+            "error": "invalid_arguments",
+            "message": f"Invalid arguments for tool '{tool_name}'.",
+            "results": [],
+        }
+    return {
+        "tool": tool_name,
+        "error": "tool_failure",
+        "message": f"Tool '{tool_name}' failed to execute.",
+        "results": [],
+    }
 
-def _extract_function_calls(output_items: list[Any]) -> list[Any]:
-    """Return output items that are function-call tool requests."""
-    calls: list[Any] = []
-    for item in output_items:
-        if getattr(item, "type", None) == "function_call":
-            calls.append(item)
-    return calls
 
 def run_agent(
     message: str,
@@ -179,8 +149,17 @@ def run_agent(
     client: OpenAI | None = None,
     max_iterations: int = MAX_ITERATIONS,
     history: list[dict[str, Any]] | None = None,
+    tenant_id: str | None = None,
+    db: Any = None,
+    is_approved: bool = False,
 ) -> AgentResult:
-    """Run the support agent loop.
+    """Run the support agent loop using the standalone Agent Orchestrator.
+
+    The custom per-iteration loop previously implemented here has been replaced
+    by :class:`agent_orchestrator.core.loop.AgentLoop` (driven through a custom
+    step function). The application-facing interface, the ``AgentResult``
+    contract, mock mode, approval gating, tenant isolation, and safe error
+    semantics are all preserved.
 
     Args:
         message: The customer's support ticket message.
@@ -191,6 +170,10 @@ def run_agent(
         history: Optional input items of the earlier conversation, oldest
             first, as produced by the session store. They are placed in front
             of the current message, which is added exactly once.
+        tenant_id: Trusted server-side tenant id injected into tool calls.
+        db: Trusted database handle injected into tool calls.
+        is_approved: Trusted approval state. When False, gated tools (such as
+            ``create_support_case``) are refused before execution.
 
     Returns:
         AgentResult with status, answer, tool_calls, and optional error.
@@ -206,158 +189,163 @@ def run_agent(
             tool_calls=[],
         )
 
-    tool_definitions = _build_tool_definitions()
-    system_prompt = _get_system_prompt()
-
-    # Build the initial input. Groq does not support previous_response_id, so
-    # the full conversation history is passed on every request. The history
-    # of the session, when there is one, is placed in front of the current
-    # message; the current message itself is added exactly once, here.
-    input_items: list[dict[str, Any]] = []
-    if history:
-        input_items.extend(history)
-    input_items.append(
-        {
-            "id": f"input_{len(input_items) + 1}",
-            "type": "message",
-            "role": "user",
-            "content": [{"type": "input_text", "text": message}],
-        }
+    # Wire the Groq provider adapter and the application tool registry. The
+    # tenant id, database, and approval state are trusted application context
+    # and are bound into the tool handlers; the model cannot influence them.
+    adapter = GroqLLMProviderAdapter(client, settings.groq_model)
+    registry = build_tool_registry(
+        tenant_id=tenant_id, db=db, is_approved=is_approved
     )
+    executor = build_tool_executor(registry)
+    loop = AgentLoop(
+        config=OrchestratorConfig(max_iterations=max_iterations),
+        tool_executor=executor,
+    )
+
+    system_prompt = _get_system_prompt()
+    advertised = build_advertised_tool_definitions(registry)
+
+    # Build the initial conversation. Groq does not support previous_response_id,
+    # so the full conversation history is passed on every request. The session
+    # history is placed in front of the current message, added exactly once.
+    initial_messages: list[dict[str, Any]] = []
+    if history:
+        initial_messages.extend(history)
+    initial_messages.append({"role": "system", "content": system_prompt})
+    initial_messages.append({"role": "user", "content": message})
 
     tool_calls_record: list[dict[str, Any]] = []
 
-    for iteration in range(max_iterations):
+    def _finish(status: str, answer: str | None = None, error: str | None = None):
+        return AgentResult(
+            status=status, answer=answer, tool_calls=tool_calls_record, error=error
+        )
+
+    def step_fn(state):
+        nonlocal tool_calls_record
+        from agent_orchestrator.core.lifecycle_helpers import (
+            IterationDecision,
+            IterationOutcome,
+        )
+        from agent_orchestrator.providers.models import ProviderRequest
+
+        request = ProviderRequest(messages=list(state.messages), tools=advertised)
+
         try:
-            response = client.responses.create(
-                model=settings.groq_model,
-                instructions=system_prompt,
-                input=input_items,
-                tools=tool_definitions,
-                temperature=0.0,
-            )
-        except Exception as exc:
-            import logging
-
-            logging.getLogger("agent").exception(
-                "Agent loop iteration %d failed: %s",
-                iteration,
-                type(exc).__name__,
-            )
-            return AgentResult(
-                status="provider_failure",
-                error="Provider service is temporarily unavailable.",
-                tool_calls=tool_calls_record,
+            response = adapter.complete(request)
+        except Exception:
+            # Provider failure: return a safe, secret-free error.
+            return IterationOutcome(
+                decision=IterationDecision.FAIL,
+                error="provider_failure|Provider service is temporarily unavailable.",
             )
 
-        output_items = list(getattr(response, "output", None) or [])
-        output_text = getattr(response, "output_text", None) or ""
+        content = response.content or ""
+        tool_calls = list(response.tool_calls or [])
 
-        function_calls = _extract_function_calls(output_items)
+        if tool_calls:
+            # Record the assistant's tool-call messages so the model can match
+            # each tool result to the call that produced it.
+            assistant_tool_calls = [
+                {
+                    "id": tc.id,
+                    "call_id": tc.id,
+                    "name": tc.name,
+                    "arguments": tc.arguments,
+                }
+                for tc in tool_calls
+            ]
+            state.messages.append(
+                {
+                    "role": "assistant",
+                    "content": content,
+                    "tool_calls": assistant_tool_calls,
+                }
+            )
 
-        # If the model requests tool calls, execute each one and feed results
-        # back to the model on the next iteration.
-        if function_calls:
-            # Add the assistant's tool-call messages to the input so that
-            # Groq's Harmony renderer can associate each tool output with the
-            # tool call that produced it. Without these preceding messages,
-            # the renderer reports "Tools should have a name!" because it
-            # cannot find the tool call that a function_call_output refers to.
-            for item in output_items:
-                if getattr(item, "type", None) == "function_call":
-                    model_dump = getattr(item, "model_dump", None)
-                    if callable(model_dump):
-                        try:
-                            dumped = model_dump()
-                            if isinstance(dumped, dict):
-                                input_items.append(dumped)
-                                continue
-                        except Exception:
-                            pass
-                    input_items.append(
-                        {
-                            "id": getattr(item, "id", None),
-                            "type": "function_call",
-                            "call_id": getattr(item, "call_id", None),
-                            "name": getattr(item, "name", None),
-                            "arguments": getattr(item, "arguments", None),
+            for tool_call in tool_calls:
+                tool_result = executor.execute(tool_call, context=None)
+
+                if tool_result.success:
+                    result_dict = tool_result.output
+                    if not isinstance(result_dict, dict):
+                        result_dict = {
+                            "tool": tool_call.name,
+                            "error": "tool_failure",
+                            "message": "Tool returned a non-object result.",
+                            "results": [],
                         }
+                else:
+                    result_dict = _safe_tool_error(
+                        tool_call.name, tool_result.error or ""
                     )
-
-            for tool_call in function_calls:
-                call_id = getattr(tool_call, "call_id", None)
-                tool_name = getattr(tool_call, "name", None)
-                raw_arguments = getattr(tool_call, "arguments", None)
-
-                # Parse arguments safely; malformed JSON is caught below.
-                arguments: dict[str, Any] = {}
-                if raw_arguments:
-                    try:
-                        arguments = json.loads(raw_arguments)
-                        if not isinstance(arguments, dict):
-                            arguments = {}
-                    except Exception:
-                        arguments = {}
-
-                # Execute through the registry dispatcher. Unknown tool names
-                # and invalid arguments are handled safely inside execute_tool.
-                result = execute_tool(tool_name or "", arguments)
 
                 tool_calls_record.append(
                     {
-                        "call_id": call_id,
-                        "tool": tool_name,
-                        "arguments": arguments,
-                        "result": result,
+                        "call_id": tool_call.id,
+                        "tool": tool_call.name,
+                        "arguments": tool_call.arguments,
+                        "result": result_dict,
                     }
                 )
 
-                # Add the tool result to the input so the model can use it.
-                # The Responses API expects ``output`` to be a string (or list of
-                # content items), not a raw dict. Serialize the tool result as
-                # JSON so the SDK can send it to the provider. Include the tool
-                # name so Groq's Harmony renderer can associate the output with
-                # the tool that was called.
-                input_items.append(
+                # Send the tool result back to the model. The payload mirrors
+                # the execute_tool result dict so ``result["tool"]`` is readable.
+                state.messages.append(
                     {
-                        "id": f"output_{iteration}_{len(input_items)}",
-                        "type": "function_call_output",
-                        "status": "completed",
-                        "call_id": call_id,
-                        "name": tool_name,
-                        "output": json.dumps(result),
+                        "role": "tool",
+                        "tool_call_id": tool_call.id,
+                        "name": tool_call.name,
+                        "content": json.dumps(result_dict),
                     }
                 )
 
-            # Continue the loop to let the model process tool results.
-            continue
+            # Let the model process the tool results on the next iteration.
+            return IterationOutcome(decision=IterationDecision.CONTINUE)
 
-        # No tool calls: look for a final text answer.
-        final_text = output_text.strip() or _extract_text_from_output(
-            output_items
-        )
-        if final_text:
-            return AgentResult(
-                status="success",
-                answer=final_text,
-                tool_calls=tool_calls_record,
+        # No tool calls: produce a final answer.
+        if content:
+            return IterationOutcome(
+                decision=IterationDecision.COMPLETE, final_response=content
             )
 
         # No tool call and no text: incomplete response.
-        return AgentResult(
-            status="max_iterations_reached",
-            error=(
-                "The model did not produce a final answer or a tool call."
-            ),
-            tool_calls=tool_calls_record,
+        return IterationOutcome(
+            decision=IterationDecision.FAIL,
+            error="The model did not produce a final answer or a tool call.",
         )
 
-    # Maximum iterations reached without a final answer.
-    return AgentResult(
+    try:
+        state, result = loop.run(messages=initial_messages, step=step_fn)
+    except Exception as exc:  # noqa: BLE001 - convert to a safe agent error
+        import logging
+
+        logging.getLogger("agent").exception(
+            "Agent execution failed: %s", type(exc).__name__
+        )
+        return _finish(
+            status="provider_failure",
+            error="Provider service is temporarily unavailable.",
+        )
+
+    if result.status == ExecutionStatus.COMPLETED:
+        return _finish(status="success", answer=result.final_response)
+
+    if result.status == ExecutionStatus.FAILED:
+        err = result.error or ""
+        if err.startswith("provider_failure|"):
+            return _finish(
+                status="provider_failure",
+                error="Provider service is temporarily unavailable.",
+            )
+        return _finish(status="max_iterations_reached", error=err)
+
+    # MAX_ITERATIONS_REACHED
+    return _finish(
         status="max_iterations_reached",
         error=(
             f"Agent reached the maximum of {max_iterations} iterations "
             "without producing a final answer."
         ),
-        tool_calls=tool_calls_record,
     )
+

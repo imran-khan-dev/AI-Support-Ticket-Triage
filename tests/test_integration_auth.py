@@ -1,4 +1,4 @@
-﻿import os
+import os
 
 os.environ.setdefault("APPROVER_TOKEN_SECRET", "test-only-secret-for-approver-credentials-0123456789")
 

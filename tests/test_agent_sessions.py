@@ -7,6 +7,7 @@ which is emptied before the test starts.
 
 import json
 import os
+import types
 import uuid
 from contextlib import contextmanager
 from unittest.mock import patch
@@ -23,6 +24,7 @@ from app.database import (
     get_session,
     list_messages,
 )
+from app.database.repository import _canonical_uuid
 from main import app
 from app.database import get_database
 from app.modules.integrations.service import issue_integration_credential
@@ -32,7 +34,6 @@ def _issue_integration_auth_header(tenant_id=None):
     db = get_database(os.environ["DATABASE_URL"])
     integration, credential, token = issue_integration_credential(db, integration_name=f"test-agent-integ-{uuid.uuid4().hex[:8]}")
     tid = tenant_id or str(uuid.uuid4())
-    from app.database.repository import _canonical_uuid
     with db.write_transaction() as conn:
         conn.execute(
             "INSERT INTO tenants (id, name, enabled) VALUES (%s, %s, TRUE) ON CONFLICT (id) DO NOTHING",
@@ -238,7 +239,6 @@ def test_existing_session_id_is_reused(database):
 
     settings = _settings()
     with _route(settings) as (headers, tenant_id):
-        from app.database.repository import _canonical_uuid
         with database.write_transaction() as conn:
             conn.execute("UPDATE sessions SET tenant_id = %s WHERE id = %s", (_canonical_uuid(tenant_id), _canonical_uuid(existing.id)))
         with patch("app.modules.agent.service.run_agent") as mock_run:
@@ -264,7 +264,6 @@ def test_existing_session_id_is_reused(database):
 def test_transcript_accumulates_across_runs_in_one_session(database):
     """A second run continues the transcript of the same session."""
     existing = create_session(database)
-    from app.database.repository import _canonical_uuid
 
     settings = _settings()
     with _route(settings) as (headers, tenant_id):
@@ -302,7 +301,6 @@ def test_two_sessions_do_not_share_messages(database):
     """Messages written for one session are invisible to another."""
     first = create_session(database)
     second = create_session(database)
-    from app.database.repository import _canonical_uuid
 
     settings = _settings()
     with _route(settings) as (headers, tenant_id):
@@ -412,7 +410,6 @@ def test_rejected_session_id_creates_no_session(database):
 def test_stored_history_is_replayed_into_the_model(database):
     """A continuation run receives the earlier turns of its session."""
     existing = create_session(database)
-    from app.database.repository import _canonical_uuid
     append_messages(
         database,
         existing.id,
@@ -536,7 +533,6 @@ def test_max_iterations_reached_is_unchanged(database):
 
 @pytest.mark.usefixtures("clean_database")
 def test_agent_cross_tenant_session_denied(database):
-    from app.database.repository import _canonical_uuid
     session = create_session(database)
     other_tenant = str(uuid.uuid4())
     with database.write_transaction() as conn:
@@ -563,10 +559,208 @@ def test_agent_null_tenant_session_denied(database):
 def test_agent_forged_tenant_header_ignored(database):
     session = create_session(database)
     headers, tenant_id = _issue_integration_auth_header()
-    from app.database.repository import _canonical_uuid
     with database.write_transaction() as conn:
         conn.execute("UPDATE sessions SET tenant_id = %s WHERE id = %s", (_canonical_uuid(tenant_id), _canonical_uuid(session.id)))
     settings = _settings()
     with patch("app.modules.agent.service.settings", settings), patch("app.modules.agent.service.groq_client", None):
         resp = client.post("/api/v1/tickets/agent/run", json={"message": "hi", "session_id": session.id}, headers={**headers, "X-Tenant-Id": str(uuid.uuid4())})
     assert resp.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# Approval behavior through the HTTP endpoint
+# ---------------------------------------------------------------------------
+
+
+class _SdkFunctionCall:
+    """Stand-in for an OpenAI SDK ``function_call`` output item."""
+
+    def __init__(self, call_id, name, arguments):
+        self.type = "function_call"
+        self.id = f"fc_{call_id}"
+        self.call_id = call_id
+        self.name = name
+        self.arguments = arguments
+
+
+class _SdkMessage:
+    """Stand-in for an OpenAI SDK assistant message output item."""
+
+    def __init__(self, text):
+        self.type = "message"
+        self.id = "msg_1"
+        self.content = [types.SimpleNamespace(type="output_text", text=text)]
+
+
+@pytest.mark.usefixtures("clean_database")
+def test_agent_unapproved_create_support_case_refused_through_endpoint(database):
+    """Through the HTTP endpoint, create_support_case is refused when not approved.
+
+    ``run_ticket_service`` does not pass ``is_approved`` to ``run_agent``,
+    so gated tools are always refused via the HTTP path.
+    """
+    session = create_session(database)
+
+    fake_client = _FakeClient([
+        _FakeResponse(
+            output=[
+                _SdkFunctionCall(
+                    "call_1",
+                    "create_support_case",
+                    '{"subject": "broken", "description": "it broke", "priority": "high", "category": "technical"}',
+                )
+            ],
+            output_text="",
+        ),
+        _FakeResponse(
+            output=[_SdkMessage("I cannot create that case.")],
+            output_text="I cannot create that case.",
+        ),
+    ])
+
+    settings = _settings()
+    with _route(settings, fake_client) as (headers, tenant_id):
+        with database.write_transaction() as conn:
+            conn.execute("UPDATE sessions SET tenant_id = %s WHERE id = %s", (_canonical_uuid(tenant_id), _canonical_uuid(session.id)))
+        response = client.post(
+            "/api/v1/tickets/agent/run",
+            json={"message": "Create a support case.", "session_id": session.id},
+            headers=headers,
+        )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "success"
+    assert len(data["tool_calls"]) == 1
+    assert data["tool_calls"][0]["tool"] == "create_support_case"
+    assert data["tool_calls"][0]["result"]["error"] == "approval_required"
+    assert data["tool_calls"][0]["result"]["results"] == []
+
+
+@pytest.mark.usefixtures("clean_database")
+def test_agent_model_supplied_tenant_id_rejected_through_endpoint(database):
+    """A tenant_id the model supplies in tool arguments is rejected end to end.
+
+    The trusted tenant id is injected by the application; the model cannot
+    override it. Stripping the model-supplied value leaves the arguments
+    missing the required tenant context, so validation fails safely.
+    """
+    session = create_session(database)
+
+    fake_client = _FakeClient([
+        _FakeResponse(
+            output=[
+                _SdkFunctionCall(
+                    "call_1",
+                    "search_knowledge",
+                    '{"query": "password reset", "tenant_id": "llm-tenant"}',
+                )
+            ],
+            output_text="",
+        ),
+        _FakeResponse(
+            output=[_SdkMessage("Done.")],
+            output_text="Done.",
+        ),
+    ])
+
+    settings = _settings()
+    with _route(settings, fake_client) as (headers, tenant_id):
+        with database.write_transaction() as conn:
+            conn.execute("UPDATE sessions SET tenant_id = %s WHERE id = %s", (_canonical_uuid(tenant_id), _canonical_uuid(session.id)))
+        response = client.post(
+            "/api/v1/tickets/agent/run",
+            json={"message": "How do I reset my password?", "session_id": session.id},
+            headers=headers,
+        )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "success"
+    assert len(data["tool_calls"]) == 1
+    assert data["tool_calls"][0]["tool"] == "search_knowledge"
+    assert data["tool_calls"][0]["result"]["error"] == "invalid_arguments"
+
+
+# ---------------------------------------------------------------------------
+# Combined session + history + memory + transcript through the endpoint
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.usefixtures("clean_database")
+def test_agent_session_history_memory_transcript_together(database):
+    """One request replays history, injects memory, and persists a transcript.
+
+    This ties together the session, history, memory, and transcript
+    responsibilities that remain in the application layer.
+    """
+    # Set up a session with prior history and a stored memory.
+    existing = create_session(database)
+    append_messages(
+        database,
+        existing.id,
+        [
+            MessageDraft(role="user", content="An older question."),
+            MessageDraft(role="assistant", content="An older answer."),
+        ],
+    )
+    _store_memory(database, existing.id)
+
+    fake_client = _FakeClient([_FakeResponse(output_text="The final answer.")])
+
+    settings = _settings()
+    with _route(settings, fake_client) as (headers, tenant_id):
+        with database.write_transaction() as conn:
+            conn.execute("UPDATE sessions SET tenant_id = %s WHERE id = %s", (_canonical_uuid(tenant_id), _canonical_uuid(existing.id)))
+        response = client.post(
+            "/api/v1/tickets/agent/run",
+            json={"message": "I need a refund for my broken laptop.", "session_id": existing.id},
+            headers=headers,
+        )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "success"
+    assert data["session_id"] == existing.id
+
+    # History was replayed: older user message appears before the new one.
+    request_input = fake_client.responses.requests[0]["input"]
+    user_texts = [
+        item["content"][0]["text"]
+        for item in request_input
+        if item.get("type") == "message" and item.get("role") == "user"
+    ]
+    assert user_texts == ["An older question.", "I need a refund for my broken laptop."]
+    assert user_texts.count("I need a refund for my broken laptop.") == 1
+
+    # Memory reached the provider through instructions, not input items.
+    call_kwargs = fake_client.responses.requests[0]
+    assert "I need a refund" in call_kwargs.get("instructions", "")
+    system_items = [
+        item for item in request_input
+        if item.get("type") == "message" and item.get("role") == "system"
+    ]
+    assert system_items == []
+
+    # The transcript was stored for the session.
+    messages = list_messages(database, existing.id)
+    assert [m.content for m in messages] == [
+        "An older question.",
+        "An older answer.",
+        "I need a refund for my broken laptop.",
+        "The final answer.",
+    ]
+
+
+def _store_memory(database, session_id):
+    """Store a memory in the given session for use by later tests."""
+    from app.domain.agent.memory_writer import build_memory_drafts
+    from app.agent_core.agent import AgentResult
+
+    result = AgentResult(
+        status="success",
+        answer="I need a refund for my broken laptop.",
+        tool_calls=[],
+    )
+    from app.domain.agent.services import store_run_memory
+    store_run_memory(database, session_id, result, source_msg_id=None)

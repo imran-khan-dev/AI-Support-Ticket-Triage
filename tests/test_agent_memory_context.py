@@ -68,7 +68,7 @@ class _RecordingSearch:
 def search(monkeypatch):
     """Replace the search of the memory module with a recorder."""
     recorder = _RecordingSearch()
-    monkeypatch.setattr("app.modules.agent.memory.search_memories", recorder)
+    monkeypatch.setattr("app.domain.agent.memory.search_memories", recorder)
     return recorder
 
 

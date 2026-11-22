@@ -64,7 +64,7 @@ def test_migrations_record_the_schema_version(database):
     with database.connection() as conn:
         assert current_version(conn) == MIGRATIONS[-1][0]
     assert current_version.__module__.endswith("migrations")
-    assert MIGRATIONS[-1][0] == 4
+    assert MIGRATIONS[-1][0] == 7
     assert (3, "action_audit_link") in [
         (version, name) for version, name, _ in MIGRATIONS
     ]

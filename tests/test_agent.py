@@ -1,10 +1,14 @@
 import json
+import uuid
 from unittest.mock import Mock, patch
 
 import pytest
 
 from app.core.config import Settings
 from app.agent_core.agent import AgentResult, MAX_ITERATIONS, run_agent
+from app.database import get_database
+from app.knowledge.service import KnowledgeService
+from app.database.repository import _canonical_uuid
 
 
 def _make_response(output_items=None, output_text=""):
@@ -49,6 +53,26 @@ def _settings():
     )
 
 
+def _create_test_tenant_with_knowledge(db):
+    """Create a test tenant and ingest a knowledge document about password reset."""
+    tenant_id = str(uuid.uuid4())
+    with db.write_transaction() as conn:
+        conn.execute(
+            "INSERT INTO tenants (id, name, enabled) VALUES (%s, %s, TRUE) ON CONFLICT (id) DO NOTHING",
+            (_canonical_uuid(tenant_id), f"test-tenant-{tenant_id[:8]}"),
+        )
+    # Ingest a document about password reset
+    service = KnowledgeService(db)
+    content = b"To reset your password, visit account settings and use 'Forgot password'. You will receive an email with a secure reset link."
+    service.ingest_document(
+        tenant_id=tenant_id,
+        file_content=content,
+        filename="password_reset.txt",
+        content_type="text/plain",
+    )
+    return tenant_id
+
+
 # ---------------------------------------------------------------------------
 # 1. Model returns a final answer without requesting a tool.
 # ---------------------------------------------------------------------------
@@ -78,15 +102,19 @@ def test_agent_returns_final_answer_without_tool():
 # ---------------------------------------------------------------------------
 
 
-def test_agent_executes_one_tool_then_answers():
+def test_agent_executes_one_tool_then_answers(clean_database):
+    """Model requests search_knowledge tool and then returns a final answer."""
+    db = clean_database
+    tenant_id = _create_test_tenant_with_knowledge(db)
     settings = _settings()
+
     with patch('app.agent_core.agent.OpenAI') as MockOpenAI:
         mock_client = Mock()
-        # First response: requests search_support_docs tool
+        # First response: requests search_knowledge tool
         first_response = _make_response(
             output_items=[
                 _make_function_call(
-                    "call_1", "search_support_docs", '{"query": "password reset"}'
+                    "call_1", "search_knowledge", '{"query": "password reset", "top_k": 5}'
                 )
             ],
             output_text="",
@@ -110,16 +138,24 @@ def test_agent_executes_one_tool_then_answers():
         ]
         MockOpenAI.return_value = mock_client
 
-        result = run_agent("How do I reset my password?", settings, mock_client)
+        result = run_agent("How do I reset my password?", settings, mock_client, tenant_id=tenant_id, db=db)
 
         assert result.status == "success"
         assert "Forgot password" in result.answer
         assert len(result.tool_calls) == 1
-        assert result.tool_calls[0]["tool"] == "search_support_docs"
+        assert result.tool_calls[0]["tool"] == "search_knowledge"
         assert result.tool_calls[0]["call_id"] == "call_1"
-        assert result.tool_calls[0]["arguments"] == {"query": "password reset"}
-        assert result.tool_calls[0]["result"]["tool"] == "search_support_docs"
-        assert len(result.tool_calls[0]["result"]["results"]) >= 1
+        assert result.tool_calls[0]["arguments"] == {"query": "password reset", "top_k": 5}
+        assert result.tool_calls[0]["result"]["tool"] == "search_knowledge"
+        assert "error" not in result.tool_calls[0]["result"]
+        # Verify the knowledge search returned results with expected structure
+        results = result.tool_calls[0]["result"]["results"]
+        assert len(results) >= 1
+        assert "chunk_id" in results[0]
+        assert "document_name" in results[0]
+        assert "content" in results[0]
+        assert "relevance_score" in results[0]
+        assert "Forgot password" in results[0]["content"]
         assert result.error is None
 
         # Verify the model was called twice (once with tool request, once

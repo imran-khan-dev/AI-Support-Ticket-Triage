@@ -69,6 +69,8 @@ def run_ticket_service(
         settings,
         groq_client,
         history=agent_history,
+        tenant_id=tenant_id,
+        db=database,
     )
 
     # 4. Persist the transcript before attempting to store its memory.
