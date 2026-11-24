@@ -4,17 +4,7 @@ from __future__ import annotations
 
 import argparse
 import os
-import sys
 from pathlib import Path
-
-# Ensure the sibling Retrieval-Stack and Eval Harness packages are importable
-# when this module is run standalone (``python -m retrieval_eval``) outside of
-# pytest, where conftest.py normally adjusts ``sys.path``.
-_BACKEND_ROOT = Path(__file__).resolve().parent.parent
-for _sub in ("Retrieval-Stack", "eval_harness"):
-    _path = _BACKEND_ROOT / _sub
-    if _path.is_dir() and str(_path) not in sys.path:
-        sys.path.insert(0, str(_path))
 
 from .dataset import load_dataset
 from .report import write_canonical_json, write_json, write_markdown

@@ -10,3 +10,8 @@ pymupdf
 tiktoken
 sentence-transformers
 jsonschema>=4.0
+
+# Local custom components (git submodules, installed editable)
+-e ".\Agent Orchestrator"
+-e ".\Retrieval-Stack"
+-e ".\eval_harness"
