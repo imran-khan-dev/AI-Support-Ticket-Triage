@@ -9,18 +9,6 @@ aggregation/reporting primitives.
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
-# Ensure the sibling Retrieval-Stack and Eval Harness packages are importable
-# when this tool is used outside of pytest (conftest.py adjusts ``sys.path``
-# under pytest). Insert early so submodule imports below resolve.
-_BACKEND_ROOT = Path(__file__).resolve().parent.parent
-for _sub in ("Retrieval-Stack", "eval_harness"):
-    _path = _BACKEND_ROOT / _sub
-    if _path.is_dir() and str(_path) not in sys.path:
-        sys.path.insert(0, str(_path))
-
 from .dataset import (
     RetrievalEvalDataset,
     EvalDocument,
